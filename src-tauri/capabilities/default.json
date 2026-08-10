@@ -1,0 +1,32 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window and the detached music player window",
+  "windows": ["main", "player"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "updater:default",
+    "process:allow-restart",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-close",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "discord-sidecar-python-venv-dev",
+          "cmd": "C:\\dev\\projeto-rpg-v2\\sidecar\\.venv\\Scripts\\python.exe",
+          "args": true
+        },
+        {
+          "name": "bot_sidecar",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    }
+  ]
+}

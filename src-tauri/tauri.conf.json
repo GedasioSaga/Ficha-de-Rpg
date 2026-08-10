@@ -1,0 +1,59 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "One Piece RPG",
+  "version": "0.1.0",
+  "identifier": "com.gedasio.rpgv2",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "One Piece RPG",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 360,
+        "minHeight": 600,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEzMkMwMzJFQ0M0RkE0QjEKUldTeHBFL01MZ01zRTBxR0hhbWV3V3psWDBlWFhyVGdRSjcyWk5ReDd3OEV3T3F2dDNjNHF4cHIK",
+      "endpoints": [
+        "https://github.com/GedasioSaga/Ficha-de-Rpg/releases/latest/download/latest.json"
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
+    "externalBin": [
+      "binaries/bot_sidecar"
+    ],
+    "resources": [
+      "resources/*",
+      "resources/imagens_semente"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "languages": ["PortugueseBR"]
+      }
+    }
+  }
+}

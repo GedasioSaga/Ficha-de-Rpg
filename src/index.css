@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: #020617; /* slate-950 */
+  color: #f1f5f9; /* slate-100 */
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar discreta no tema escuro */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #1e293b transparent; /* slate-800 */
+}
+
+/* Equalizador animado do mini-player de música (só enquanto tocando).
+   Três paradas em vez de duas: com só ida-e-volta o movimento é simétrico e
+   previsível; a parada intermediária quebra a simetria e lembra som real.
+   Anima só `transform` (composto na GPU, sem reflow) — nunca `height`. */
+@keyframes eq-anim {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  35% {
+    transform: scaleY(1);
+  }
+  65% {
+    transform: scaleY(0.55);
+  }
+}
+
+/* NÃO respeitamos `prefers-reduced-motion` de propósito (decisão do usuário,
+   2026-07-27). O Windows desta máquina está com "Efeitos de animação"
+   desligado, o que ligava a preferência e zerava TODA animação do app — o
+   equalizador do player ficava congelado, e nenhuma transição funcionava.
+   App pessoal, um usuário só, que quer o movimento.
+
+   Se um dia isto virar multiusuário, a regra certa volta a ser respeitar a
+   preferência do sistema e isentar caso a caso o que for essencial. */
