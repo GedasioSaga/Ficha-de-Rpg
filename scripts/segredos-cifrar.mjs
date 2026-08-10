@@ -54,13 +54,30 @@ try {
   process.exit(1);
 }
 
-const rl = createInterface({ input: process.stdin, output: process.stdout });
-const senha = await rl.question("Senha-mestra (será pedida 1x em cada máquina nova): ");
-const confirma = await rl.question("Confirme a senha: ");
-rl.close();
+// `--senha-arquivo <caminho>` lê a senha de um arquivo local (automação);
+// sem a flag, pergunta no terminal.
+let senha;
+const idxFlag = process.argv.indexOf("--senha-arquivo");
+if (idxFlag !== -1) {
+  const caminho = process.argv[idxFlag + 1];
+  if (!caminho) {
+    console.error("--senha-arquivo exige um caminho.");
+    process.exit(1);
+  }
+  senha = readFileSync(caminho, "utf8").trim();
+} else {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  senha = await rl.question("Senha-mestra (será pedida 1x em cada máquina nova): ");
+  const confirma = await rl.question("Confirme a senha: ");
+  rl.close();
+  if (senha !== confirma) {
+    console.error("Senhas diferentes. Nada gravado.");
+    process.exit(1);
+  }
+}
 
-if (!senha || senha !== confirma) {
-  console.error("Senhas vazias ou diferentes. Nada gravado.");
+if (!senha) {
+  console.error("Senha vazia. Nada gravado.");
   process.exit(1);
 }
 
