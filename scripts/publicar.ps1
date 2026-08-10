@@ -76,7 +76,9 @@ if ($staged -contains "segredos.local.json") { throw "segredos.local.json staged
 # 5. Commit + tag + push (o push da tag dispara o workflow de release).
 git commit -m "release: v$Versao" 2>&1 | ForEach-Object { "$_" }
 Checar "git commit"
-git tag "v$Versao" 2>&1 | ForEach-Object { "$_" }
+# Tag ANOTADA de proposito: `git push --follow-tags` ignora tag leve
+# (aprendido na v0.2.0 - a tag ficou local e o workflow nunca disparou).
+git tag -a "v$Versao" -m "release v$Versao" 2>&1 | ForEach-Object { "$_" }
 Checar "git tag"
 git push --follow-tags 2>&1 | ForEach-Object { "$_" }
 Checar "git push"
