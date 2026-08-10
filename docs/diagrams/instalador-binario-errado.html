@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>v0.2.0 — o instalador saiu sem o app dentro</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --color-paper:       #f5f5f5;
+      --color-ink:         #2d3142;
+      --color-muted:       #4f5d75;
+      --color-soft:        #7a8399;
+      --color-rule:        rgba(45,49,66,0.12);
+      --color-accent:      #eb6c36;
+      --font-sans:   'Geist', system-ui, sans-serif;
+      --font-serif:  'Instrument Serif', 'Times New Roman', serif;
+      --font-mono:   'Geist Mono', ui-monospace, Menlo, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      min-height: 100vh;
+      padding: 3rem 2rem;
+      color: var(--color-ink);
+    }
+
+    .container { max-width: 1200px; margin: 0 auto; }
+    .header { margin-bottom: 2.5rem; }
+
+    .header-eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.75rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.75rem, 3vw + 1rem, 2.5rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle { font-size: 1rem; line-height: 1.55; color: var(--color-muted); max-width: 60ch; }
+    .subtitle code { font-family: var(--font-mono); font-size: 0.875rem; color: var(--color-ink); }
+
+    .diagram-container { background: transparent; border: none; padding: 0; overflow-x: auto; }
+    svg { width: 100%; min-width: 880px; display: block; }
+
+    .cards {
+      display: grid;
+      grid-template-columns: 1.15fr 1fr 0.85fr;
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+    @media (max-width: 900px) { .cards { grid-template-columns: 1fr; } }
+
+    .card { background: #ffffff; border-radius: 6px; border: 1px solid var(--color-rule); padding: 1.25rem; }
+
+    .card-eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.6rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--color-soft);
+      margin-bottom: 0.5rem;
+    }
+
+    .card-header {
+      display: flex; align-items: center; gap: 0.6rem;
+      margin-bottom: 0.875rem; padding-bottom: 0.875rem;
+      border-bottom: 1px solid rgba(45,49,66,0.08);
+    }
+
+    .card-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .card-dot.ink   { background: var(--color-ink); }
+    .card-dot.muted { background: var(--color-muted); }
+    .card-dot.coral { background: var(--color-accent); }
+
+    .card h3 { font-size: 0.875rem; font-weight: 600; letter-spacing: -0.005em; }
+    .card ul { list-style: none; color: var(--color-muted); font-size: 0.8125rem; line-height: 1.55; }
+    .card li { margin-bottom: 0.4rem; padding-left: 0.875rem; position: relative; }
+    .card li::before { content: '—'; position: absolute; left: 0; color: rgba(45,49,66,0.25); font-size: 0.75rem; }
+    .card code { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-ink); }
+
+    .footer {
+      margin-top: 2rem; padding-top: 1.5rem;
+      border-top: 1px solid rgba(45,49,66,0.10);
+      font-family: var(--font-mono); font-size: 0.72rem;
+      letter-spacing: 0.06em; color: var(--color-soft);
+      display: flex; justify-content: space-between; align-items: center;
+      flex-wrap: wrap; gap: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <div class="header">
+      <p class="header-eyebrow">Diagnóstico · One Piece RPG v0.2.0 · 10 ago 2026</p>
+      <h1>O instalador saiu sem o app dentro</h1>
+      <p class="subtitle">O crate tem dois binários e o <code>Cargo.toml</code> não dizia qual é o principal. O tauri-cli escolheu sozinho — e escolheu o utilitário de dev. O instalador de 65 MB foi publicado com tudo, menos o app.</p>
+    </div>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 880 920" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/>
+          </marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/>
+          </marker>
+          <marker id="arrow-soft" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="rgba(45,49,66,0.30)"/>
+          </marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- ================= ARROWS FIRST ================= -->
+
+        <!-- main.rs -> escolha (elbow, r=8) -->
+        <path d="M 216 96 L 216 128 Q 216 136 224 136 L 336 136 Q 344 136 344 144 L 344 168"
+              fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- exportar_semente.rs -> escolha (elbow, r=8) -->
+        <path d="M 664 96 L 664 128 Q 664 136 656 136 L 544 136 Q 536 136 536 144 L 536 168"
+              fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- escolha -> descartado (dashed, dead branch) -->
+        <path d="M 344 248 L 344 276 Q 344 284 336 284 L 224 284 Q 216 284 216 292 L 216 312"
+              fill="none" stroke="rgba(45,49,66,0.30)" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-soft)"/>
+        <rect x="236" y="264" width="96" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="284" y="273" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">DESCARTADO</text>
+
+        <!-- escolha -> escolhido (coral) -->
+        <path d="M 536 248 L 536 276 Q 536 284 544 284 L 656 284 Q 664 284 664 292 L 664 312"
+              fill="none" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+        <rect x="556" y="264" width="88" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="600" y="273" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">EMPACOTADO</text>
+
+        <!-- escolhido -> setup -->
+        <line x1="664" y1="392" x2="664" y2="456" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+        <rect x="676" y="418" width="64" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="708" y="427" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">NSIS :638</text>
+
+        <!-- setup -> atalho -->
+        <line x1="664" y1="536" x2="664" y2="600" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+        <rect x="676" y="562" width="64" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="708" y="571" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">NSIS :989</text>
+
+        <!-- atalho -> morte -->
+        <line x1="664" y1="680" x2="664" y2="744" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+        <rect x="676" y="706" width="72" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="712" y="715" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">DUPLO CLIQUE</text>
+
+        <!-- ================= NODES ================= -->
+
+        <!-- A — src/main.rs -->
+        <rect x="48" y="32" width="336" height="64" rx="6" fill="#f5f5f5"/>
+        <rect x="48" y="32" width="336" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <rect x="56" y="40" width="24" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+        <text x="68" y="49" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">BIN</text>
+        <text x="216" y="70" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">src/main.rs — o app</text>
+        <text x="216" y="86" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">projeto-rpg-v2.exe · 18.452 KB</text>
+
+        <!-- B — src/bin/exportar_semente.rs -->
+        <rect x="496" y="32" width="336" height="64" rx="6" fill="#f5f5f5"/>
+        <rect x="496" y="32" width="336" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <rect x="504" y="40" width="24" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+        <text x="516" y="49" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">BIN</text>
+        <text x="664" y="70" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">src/bin/exportar_semente.rs — dev</text>
+        <text x="664" y="86" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">exportar_semente.exe · 1.884 KB</text>
+
+        <!-- Selection -->
+        <rect x="224" y="168" width="432" height="80" rx="6" fill="#f5f5f5"/>
+        <rect x="224" y="168" width="432" height="80" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <rect x="232" y="176" width="76" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+        <text x="270" y="185" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CAUSA RAIZ</text>
+        <text x="440" y="214" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">tauri-cli escolhe o binário principal</text>
+        <text x="440" y="232" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Cargo.toml sem default-run · escolha indefinida</text>
+
+        <!-- Discarded -->
+        <rect x="48" y="312" width="336" height="80" rx="6" fill="#f5f5f5"/>
+        <rect x="48" y="312" width="336" height="80" rx="6" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="216" y="352" fill="#7a8399" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">projeto-rpg-v2.exe</text>
+        <text x="216" y="370" fill="#7a8399" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">compilado e jogado fora</text>
+
+        <!-- Chosen -->
+        <rect x="496" y="312" width="336" height="80" rx="6" fill="#f5f5f5"/>
+        <rect x="496" y="312" width="336" height="80" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+        <text x="664" y="352" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">exportar_semente.exe</text>
+        <text x="664" y="370" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">installer.nsi:46 MAINBINARYNAME</text>
+
+        <!-- setup.exe -->
+        <rect x="496" y="456" width="336" height="80" rx="6" fill="#f5f5f5"/>
+        <rect x="496" y="456" width="336" height="80" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="664" y="496" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">setup.exe publicado no Release</text>
+        <text x="664" y="514" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">65.631.593 B · sem o app dentro</text>
+
+        <!-- atalho -->
+        <rect x="496" y="600" width="336" height="80" rx="6" fill="#f5f5f5"/>
+        <rect x="496" y="600" width="336" height="80" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="664" y="640" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Atalho “One Piece RPG”</text>
+        <text x="664" y="658" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">aponta pro exportar_semente.exe</text>
+
+        <!-- morte -->
+        <rect x="496" y="744" width="336" height="80" rx="6" fill="#f5f5f5"/>
+        <rect x="496" y="744" width="336" height="80" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+        <text x="664" y="784" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Console pisca e some</text>
+        <text x="664" y="802" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">rpg.db não existe · eprintln + exit(1)</text>
+
+        <!-- Editorial callout — the arithmetic proof (fills the dead left column) -->
+        <line x1="48" y1="472" x2="48" y2="672" stroke="#eb6c36" stroke-width="1.5"/>
+        <text x="72" y="486" fill="#eb6c36" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">A PROVA</text>
+
+        <text x="72" y="518" fill="#2d3142" font-size="16" font-style="italic" font-family="'Instrument Serif', serif">O bundler documentou</text>
+        <text x="72" y="540" fill="#2d3142" font-size="16" font-style="italic" font-family="'Instrument Serif', serif">o próprio erro.</text>
+
+        <text x="72" y="572" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">installer.nsi:64</text>
+        <text x="72" y="588" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">ESTIMATEDSIZE = 136.343 KB</text>
+
+        <text x="72" y="616" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">soma do que ele copia,</text>
+        <text x="72" y="632" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">com 1.884 e sem 18.452:</text>
+        <text x="72" y="648" fill="#2d3142" font-size="9" font-family="'Geist Mono', monospace">136.343 KB — bate ao KB.</text>
+
+        <!-- ================= LEGEND ================= -->
+        <line x1="48" y1="856" x2="832" y2="856" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text x="48" y="876" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGENDA</text>
+
+        <rect x="148" y="868" width="16" height="12" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="172" y="877" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">ARTEFATO DE BUILD</text>
+
+        <rect x="384" y="868" width="16" height="12" rx="2" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="408" y="877" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">DESCARTADO NO BUILD</text>
+
+        <rect x="640" y="868" width="16" height="12" rx="2" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+        <text x="664" y="877" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">CAMINHO DO DEFEITO</text>
+      </svg>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <p class="card-eyebrow">Por que passou batido</p>
+        <div class="card-header">
+          <span class="card-dot coral"></span>
+          <h3>Invisível na máquina que produziu</h3>
+        </div>
+        <ul>
+          <li>Na máquina de dev o <code>exportar_semente</code> roda com sucesso e sai calado: <code>%APPDATA%\com.gedasio.rpgv2\rpg.db</code> existe.</li>
+          <li>Ninguém abre o atalho instalado no dia a dia — o dev roda <code>npm run tauri dev</code> ou o exe cru do <code>target/</code>.</li>
+          <li>O release do CI tem 65.631.593 B contra 65.627.194 B do bundle local: 0,007% de diferença. Mesmo defeito nos dois.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <p class="card-eyebrow">Correção aplicada</p>
+        <div class="card-header">
+          <span class="card-dot ink"></span>
+          <h3>Desempate + dois gates</h3>
+        </div>
+        <ul>
+          <li><code>default-run = "projeto-rpg-v2"</code> no <code>Cargo.toml</code> — a causa raiz.</li>
+          <li><code>publicar.ps1</code> aborta antes do push se o <code>default-run</code> sumir.</li>
+          <li>CI checa <code>cargo metadata</code> antes do build e o <code>MAINBINARYNAME</code> gerado depois.</li>
+          <li><code>mainBinaryName</code> foi descartado: ele <em>renomeia</em> o binário, não escolhe — mascararia o bug.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <p class="card-eyebrow">Ainda em aberto</p>
+        <div class="card-header">
+          <span class="card-dot muted"></span>
+          <h3>Falha silenciosa no setup()</h3>
+        </div>
+        <ul>
+          <li>Não foi a causa desta vez, mas continua real: <code>lib.rs:926</code>, <code>:951</code> e <code>:1110</code> usam <code>.expect()</code>.</li>
+          <li><code>main.rs:2</code> tira o console no release — panic ali morre sem deixar rastro.</li>
+          <li>Quem instalou a v0.2.0 precisa desinstalar e reinstalar: o auto-update só roda com o app aberto.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span>projeto-rpg-v2 · src-tauri/Cargo.toml · target/release/nsis/x64/installer.nsi</span>
+      <span>grafo: 2313 nodes · 5928 edges · 10 ago 2026</span>
+    </div>
+
+  </div>
+</body>
+</html>

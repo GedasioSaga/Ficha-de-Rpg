@@ -29,6 +29,18 @@ function Checar($etapa) {
     if ($LASTEXITCODE -ne 0) { throw "$etapa falhou (exit $LASTEXITCODE)" }
 }
 
+# 0. Gate do binario principal. O crate tem DOIS bins (src/main.rs -> o app, e
+# src/bin/exportar_semente.rs -> utilitario de dev). Sem `default-run` o
+# tauri-cli escolhe sozinho, e na v0.2.0 escolheu o exportar_semente: o
+# instalador saiu SEM o app dentro e o atalho abria um utilitario de console
+# que morria sozinho. Nao da pra checar o installer.nsi aqui (quem builda e o
+# CI), entao trava na config - que e a causa raiz.
+Write-Host "== Gate do binario principal..." -ForegroundColor Cyan
+$cargoToml = [System.IO.File]::ReadAllText("$raiz\src-tauri\Cargo.toml")
+if ($cargoToml -notmatch '(?m)^\s*default-run\s*=\s*"projeto-rpg-v2"\s*$') {
+    throw 'src-tauri/Cargo.toml sem default-run = "projeto-rpg-v2". O bundle sairia com o binario errado (v0.2.0). Publicacao ABORTADA.'
+}
+
 # 1. App aberto segura lock do target/ e pode escrever no banco no meio do export.
 Get-Process "projeto-rpg-v2" -ErrorAction SilentlyContinue | Stop-Process -Force
 Get-Process "One Piece RPG" -ErrorAction SilentlyContinue | Stop-Process -Force

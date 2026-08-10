@@ -34,6 +34,22 @@ jobs:
       - name: install frontend dependencies
         run: npm ci
 
+      # Gate ANTES do build: o crate tem dois bins (src/main.rs = o app,
+      # src/bin/exportar_semente.rs = utilitario de dev). Sem `default-run` o
+      # tauri-cli escolhe sozinho, e na v0.2.0 escolheu o exportar_semente — o
+      # instalador foi publicado sem o app dentro. Falhar aqui evita criar o
+      # release quebrado.
+      - name: verificar default-run antes do build
+        shell: pwsh
+        working-directory: src-tauri
+        run: |
+          $meta = cargo metadata --format-version 1 --no-deps | ConvertFrom-Json
+          $pkg = $meta.packages | Where-Object { $_.name -eq 'projeto-rpg-v2' }
+          Write-Host "default_run = $($pkg.default_run)"
+          if ($pkg.default_run -ne 'projeto-rpg-v2') {
+            throw "Cargo.toml sem default-run = 'projeto-rpg-v2'. O bundle sairia com o binario errado. Build ABORTADO."
+          }
+
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -45,3 +61,21 @@ jobs:
           releaseBody: 'Instalador Windows nos assets. Apps instalados atualizam sozinhos.'
           releaseDraft: false
           prerelease: false
+
+      # Gate DEPOIS do build: prova, lendo o script que o bundler gerou, que o
+      # instalador publicado carrega o app e nao outro binario. Roda apos o
+      # publish (o tauri-action builda e publica no mesmo passo), entao nao
+      # impede o release — mas pinta o run de vermelho na hora se regredir.
+      - name: verificar binario empacotado no instalador
+        if: always()
+        shell: pwsh
+        run: |
+          $nsi = "src-tauri/target/release/nsis/x64/installer.nsi"
+          if (-not (Test-Path $nsi)) { throw "installer.nsi nao encontrado em $nsi" }
+          $achado = Select-String -Path $nsi -Pattern '^!define MAINBINARYNAME "(.+)"$'
+          if (-not $achado) { throw "MAINBINARYNAME nao encontrado no installer.nsi" }
+          $nome = $achado.Matches[0].Groups[1].Value
+          Write-Host "MAINBINARYNAME = $nome"
+          if ($nome -ne 'projeto-rpg-v2') {
+            throw "Instalador empacotou o binario ERRADO ('$nome'). Esperado 'projeto-rpg-v2'. NAO distribua este release."
+          }
