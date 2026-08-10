@@ -41,19 +41,17 @@ if ($LASTEXITCODE -ne 0) { Pop-Location; throw "exportar_semente falhou" }
 Pop-Location
 
 # 3. Bump de versao nos 3 manifestos (tauri.conf.json e o que a tag/release usa).
+# SEM Set-Content -Encoding utf8: no PS 5.1 ele grava BOM, e o CI nao parseia
+# JSON/TOML com BOM (foi o que derrubou o primeiro build da v0.2.0).
 Write-Host "== Versao -> $Versao" -ForegroundColor Cyan
-$conf = "$raiz\src-tauri\tauri.conf.json"
-(Get-Content $conf -Raw -Encoding utf8) -replace '"version": "\d+\.\d+\.\d+"', "`"version`": `"$Versao`"" |
-    Set-Content $conf -Encoding utf8 -NoNewline
-
-$cargo = "$raiz\src-tauri\Cargo.toml"
-$cargoTexto = Get-Content $cargo -Raw -Encoding utf8
-$cargoTexto = $cargoTexto -replace '(?m)^version = "\d+\.\d+\.\d+"', "version = `"$Versao`""
-Set-Content $cargo -Value $cargoTexto -Encoding utf8 -NoNewline
-
-$pkg = "$raiz\package.json"
-(Get-Content $pkg -Raw -Encoding utf8) -replace '"version": "\d+\.\d+\.\d+"', "`"version`": `"$Versao`"" |
-    Set-Content $pkg -Encoding utf8 -NoNewline
+$utf8SemBom = New-Object System.Text.UTF8Encoding $false
+function BumpVersao($caminho, $padrao, $novo) {
+    $texto = [System.IO.File]::ReadAllText($caminho)
+    [System.IO.File]::WriteAllText($caminho, ($texto -replace $padrao, $novo), $utf8SemBom)
+}
+BumpVersao "$raiz\src-tauri\tauri.conf.json" '"version": "\d+\.\d+\.\d+"' "`"version`": `"$Versao`""
+BumpVersao "$raiz\src-tauri\Cargo.toml" '(?m)^version = "\d+\.\d+\.\d+"' "version = `"$Versao`""
+BumpVersao "$raiz\package.json" '"version": "\d+\.\d+\.\d+"' "`"version`": `"$Versao`""
 
 # Cargo.lock precisa acompanhar o bump do Cargo.toml (senao o runner do CI
 # regenera o lock e o build local diverge do publicado). `cargo metadata`
