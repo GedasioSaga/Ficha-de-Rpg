@@ -5,6 +5,8 @@ import { alternarModoMusica, useModoMusica } from "../features/batalha/modoMusic
 import DiscordConexaoDriver from "../features/batalha/DiscordConexaoDriver";
 import AtualizadorBanner from "./AtualizadorBanner";
 import CofreSenhaDialog from "./CofreSenhaDialog";
+import SyncBootDriver from "../features/sync/SyncBootDriver";
+import AutoEnviarSync from "../features/sync/AutoEnviarSync";
 
 export default function AppShell() {
   const [colapsado, setColapsado] = useState(false);
@@ -44,6 +46,16 @@ export default function AppShell() {
           aviso de update valem pro app inteiro, não pra uma rota. */}
       <CofreSenhaDialog />
       <AtualizadorBanner />
+
+      {/* Evento do boot automático de sync (Fase 3): toast se aplicou sozinho,
+          diálogo de conflito se achou mudança local não enviada. Também vale
+          pro app inteiro, não pra uma rota — igual aos dois acima. */}
+      <SyncBootDriver />
+
+      {/* Auto-enviar com debounce (Fase 5): ouve toda mutação do app pelo
+          `MutationCache` do React Query — vale pro app inteiro, mesma razão
+          dos drivers acima. */}
+      <AutoEnviarSync />
     </div>
   );
 }

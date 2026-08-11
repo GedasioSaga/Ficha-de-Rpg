@@ -16,9 +16,15 @@
 
 use std::path::{Path, PathBuf};
 
-/// Linhas da `config` que NUNCA podem ir na semente pública. O canal do
-/// Discord fica (é um id de canal, não um segredo, e é útil viajar).
-const CHAVES_DE_SEGREDO: [&str; 1] = ["gemini_api_keys"];
+/// Linhas da `config` que NUNCA podem ir na semente pública: a chave Gemini
+/// (segredo) e o carimbo de sync inteiro (FIX6 — `sync_pasta`/`sync_contador`/
+/// `sync_machine_id`/`sync_hora`/`sync_revisao_base` são por-PC; se viajassem
+/// na semente, toda máquina nova nasceria com o mesmo `machine_id` e um
+/// contador não-zero, quebrando a guarda de conflito da sync de nuvem). O
+/// canal do Discord fica de fora dessa lista (é um id de canal, não um
+/// segredo, e é útil viajar). Lista centralizada em
+/// `sincronizacao_nuvem::CONFIG_NAO_EXPORTAR` pra não divergir dos dois scrubs.
+const CHAVES_DE_SEGREDO: &[&str] = projeto_rpg_v2_lib::db::sincronizacao_nuvem::CONFIG_NAO_EXPORTAR;
 
 fn main() {
     if let Err(e) = rodar() {
@@ -47,7 +53,7 @@ fn rodar() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("semente exportada: {}", banco_destino.display());
     println!("imagens: {copiadas} copiada(s), {removidas} removida(s)");
-    println!("(chaves Gemini scrubadas — segredo só viaja no segredos.enc)");
+    println!("(chave Gemini + carimbo de sync scrubados — segredo só viaja no segredos.enc)");
     Ok(())
 }
 
@@ -73,7 +79,7 @@ fn exportar_banco(origem: &Path, destino: &Path) -> Result<(), Box<dyn std::erro
     // primeira versão deste export). `secure_delete` zera os bytes no DELETE
     // e o VACUUM final reescreve o arquivo sem as páginas soltas.
     copia.pragma_update(None, "secure_delete", "ON")?;
-    for chave in CHAVES_DE_SEGREDO {
+    for &chave in CHAVES_DE_SEGREDO {
         copia.execute("DELETE FROM config WHERE chave = ?1", [chave])?;
     }
     copia.execute("VACUUM", [])?;

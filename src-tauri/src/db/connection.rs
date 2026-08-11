@@ -27,6 +27,7 @@ fn migrations() -> Migrations<'static> {
         M::up(include_str!(
             "../../migrations/0011_habilidade_acao_efeito_extras.sql"
         )),
+        M::up(include_str!("../../migrations/0012_sync_revisao.sql")),
     ])
 }
 
@@ -42,7 +43,11 @@ pub fn open(path: &Path) -> Result<Connection, AppError> {
     preparar(Connection::open(path)?)
 }
 
-#[cfg(test)]
+/// Banco SQLite em memória, com migrations aplicadas. Usado pelos testes de
+/// todo o crate e também como placeholder de `db::sincronizacao_nuvem` /
+/// `lib.rs::sync_baixar`: no Windows não dá pra `rename` por cima de um
+/// arquivo com handle aberto, então a conexão viva precisa ser trocada por
+/// esta (breve) antes de materializar o pacote baixado e reaberta depois.
 pub fn open_in_memory() -> Result<Connection, AppError> {
     preparar(Connection::open_in_memory()?)
 }

@@ -410,6 +410,62 @@ export interface EventoMusica {
   fila: ItemFila[];
 }
 
+/* ---------------------------- Sync de nuvem ---------------------------- */
+
+/**
+ * O que a guarda leve decidiu (Rust `Acao`, `#[serde(rename_all = "snake_case")]`).
+ * Ver docs/plans/2026-08-10-sync-nuvem.md §4.
+ */
+export type AcaoSync =
+  | "em_dia"
+  | "nuvem_mais_nova"
+  | "local_mais_novo"
+  | "conflito"
+  | "sem_nuvem";
+
+/**
+ * Espelha `TipoTransporte` (Rust, `db::sincronizacao_nuvem`) — persistido em
+ * `config.sync_transporte` (Fase 3, docs/plans/2026-08-11-sync-google-drive.md).
+ * `"pasta"` é o default (também o que uma instalação sem a chave assume).
+ */
+export type TipoTransporte = "pasta" | "drive";
+
+/** Espelha `SyncStatus` (Rust) — devolvido por `sync_status`. */
+export interface SyncStatus {
+  acao: AcaoSync;
+  contador_nuvem: number | null;
+  contador_local: number;
+  sujo: boolean;
+  hora: string | null;
+}
+
+/** Espelha `SyncResultado` (Rust) — devolvido por `sync_enviar`/`sync_baixar`. */
+export interface SyncResultado {
+  sucesso: boolean;
+  mensagem: string;
+  contador: number | null;
+  backup: string | null;
+}
+
+/**
+ * Espelha `EventoBootSync` (Rust, `#[serde(tag = "tipo")]`) — devolvido por
+ * `sync_evento_boot`, lido uma vez no primeiro render (Fase 3, ver
+ * docs/plans/2026-08-10-sync-nuvem.md §"Fase 3 — Boot automático + conflito").
+ */
+export type EventoBootSync =
+  | { tipo: "nenhum" }
+  | { tipo: "aplicado_automaticamente"; contador: number }
+  | { tipo: "conflito_pendente"; contador_nuvem: number };
+
+/**
+ * Espelha `GoogleStatus` (Rust, `google::auth`) — devolvido por `google_status`
+ * (docs/plans/2026-08-11-sync-google-drive.md, Fase 1). Nunca carrega token.
+ */
+export interface GoogleStatus {
+  conectado: boolean;
+  email: string | null;
+}
+
 export interface CanalVoz {
   id: string;
   nome: string;

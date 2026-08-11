@@ -3,3 +3,4 @@ pub mod error;
 pub mod imagens;
 pub mod portabilidade;
 pub mod repositorios;
+pub mod sincronizacao_nuvem;

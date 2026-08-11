@@ -12,7 +12,12 @@
 //   node scripts/segredos-cifrar.mjs --auto-teste   # vetor fixo p/ teste Rust
 //
 // segredos.local.json (gitignored, NUNCA commitar):
-//   { "discord_token": "...", "gemini_api_keys": "chave1,chave2" }
+//   {
+//     "discord_token": "...",
+//     "gemini_api_keys": "chave1,chave2",
+//     "google_client_id": "...",       (sync via Google Drive; opcional)
+//     "google_client_secret": "..."    (idem)
+//   }
 
 import { createCipheriv, randomBytes, scryptSync } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -36,7 +41,12 @@ function cifrar(segredos, senha, salt, nonce) {
 // (segredos.rs::tests::decifra_blob_gerado_pelo_node).
 if (process.argv.includes("--auto-teste")) {
   const blob = cifrar(
-    { discord_token: "tok-node", gemini_api_keys: "g1,g2" },
+    {
+      discord_token: "tok-node",
+      gemini_api_keys: "g1,g2",
+      google_client_id: "cid-node",
+      google_client_secret: "csec-node",
+    },
     "teste-cross-impl",
     Buffer.alloc(16, 0xab),
     Buffer.alloc(12, 0xcd),

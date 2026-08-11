@@ -32,10 +32,12 @@ O script: exporta o banco vivo pra semente (removendo segredos), sobe a versão,
 commita, taggeia `v0.2.0` e dá push. O GitHub Actions builda o instalador
 assinado e publica o release (~15-20 min). Acompanhe com `gh run watch`.
 
-### Rotacionar segredos (token do Discord / chaves Gemini)
+### Rotacionar segredos (token do Discord / chaves Gemini / credenciais Google)
 
 1. Edite `segredos.local.json` na raiz (fora do git):
-   `{ "discord_token": "...", "gemini_api_keys": "chave1,chave2" }`
+   `{ "discord_token": "...", "gemini_api_keys": "chave1,chave2", "google_client_id": "...", "google_client_secret": "..." }`
+   (`google_client_id`/`google_client_secret` são opcionais — só o sync via
+   Google Drive precisa deles.)
 2. `node scripts/segredos-cifrar.mjs` (pede a senha-mestra) — gera
    `src-tauri/resources/segredos.enc`, que É commitável (cifrado).
 3. Publique uma versão nova. As outras máquinas re-importam sozinhas, sem

@@ -4,24 +4,25 @@
 //! pois ela depende do `AppHandle`; aqui dentro só se mexe com `Path`, o que
 //! deixa a lógica testável sem precisar subir um app Tauri).
 //!
-//! Semântica (decisão do usuário, 2026-08-10): **"o que um computador vê,
-//! todos veem"**. A máquina master exporta a semente ao publicar; nas outras,
-//! cada UPDATE do app substitui o banco local pelo snapshot novo — com backup
-//! automático antes (`rpg.db.bak-*`), porque sobrescrever é destrutivo por
-//! definição. O controle de "este instalador já importou aqui?" é um marcador
-//! em `semente_importada.txt` com a versão do app; sem tocar o app, nada roda
-//! duas vezes.
+//! Semântica (revisada 2026-08-10 — Modelo A, `docs/plans/2026-08-10-sync-nuvem.md`
+//! §2 Q1, que **revoga** a semântica anterior "o que um computador vê todos
+//! veem"): **update do app mexe só no app.** A semente é só o *bootstrap* de
+//! máquina vazia — depois que o banco tem dado do usuário, a semente nunca
+//! mais o toca, em UPDATE nenhum. Sincronizar dado entre PCs passa a ser
+//! responsabilidade explícita do usuário via `db::sincronizacao_nuvem`
+//! (Fase 1+ do plano), não algo que acontece sozinho num update de instalador.
 //!
 //! Máquina nova (banco inexistente ou sem NENHUM dado do usuário — zero
-//! linhas em `personagem`/`nota`/`mapa`) importa direto, sem backup: não há o
-//! que perder. Um `rpg.db` que existe mas não abre como SQLite é tratado como
-//! "tem dado": backup + substituição (o backup preserva a evidência).
+//! linhas em `personagem`/`nota`/`mapa`) importa direto: não há o que perder.
+//! Banco com dado (inclusive um `rpg.db` corrompido que não abre como SQLite,
+//! tratado como "tem dado" por precaução) é sempre no-op — `EmDia`, nunca
+//! sobrescrito, nunca precisa de backup porque nada é substituído.
 //!
-//! Imagens são sempre ADITIVAS (nome = sha256 do conteúdo, nunca sobrescreve
-//! nem apaga) — retrato órfão no destino é inofensivo e barato.
+//! Imagens da semente só entram no bootstrap (junto do banco vazio). Um banco
+//! com dado não ganha imagens novas da semente — isso também virou tarefa da
+//! sincronização de nuvem.
 
 use rusqlite::{Connection, OpenFlags};
-use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 /// Tabelas cuja presença de qualquer linha conta como "tem dado do usuário".
@@ -37,21 +38,19 @@ const TABELAS_DE_DADO_DO_USUARIO: [&str; 3] = ["personagem", "nota", "mapa"];
 pub enum Sincronizacao {
     /// Sem recurso de semente no bundle (dev sem build, instalador incompleto).
     SemRecurso,
-    /// Marcador já é desta versão do app — nada a fazer.
+    /// Banco já tem dado do usuário: no-op, a semente não toca (Modelo A).
     EmDia,
-    /// Máquina sem dado nenhum: importou sem backup.
+    /// Máquina sem dado nenhum: importou sem backup (bootstrap).
     Semeado,
-    /// Banco local idêntico à semente (sha256): só marcador + imagens.
-    PuladoIdentico,
-    /// Substituiu o banco local; backup em `PathBuf`.
-    Substituido(PathBuf),
 }
 
 /// Sincroniza o banco/imagens locais com a semente do bundle, seguindo a
-/// semântica do módulo. `versao_app` é a versão do instalador atual;
-/// `marcador` é o arquivo que guarda a última versão importada nesta máquina.
-/// Falha de IO propaga; quem chama (setup) loga e segue — semente nunca
-/// derruba o app.
+/// semântica do módulo: só age em bootstrap (banco vazio/inexistente); banco
+/// com dado do usuário é sempre no-op (Modelo A — a semente nunca mais
+/// sobrescreve depois do primeiro dado gravado). `versao_app` e `marcador`
+/// seguem existindo só para marcar QUANDO o bootstrap aconteceu (diagnóstico);
+/// não controlam mais se a semente roda ou não. Falha de IO propaga; quem
+/// chama (setup) loga e segue — semente nunca derruba o app.
 pub fn sincronizar_semente(
     banco_destino: &Path,
     banco_semente: Option<&Path>,
@@ -73,48 +72,10 @@ pub fn sincronizar_semente(
         return Ok(Sincronizacao::Semeado);
     }
 
-    // Este instalador já importou aqui — não roda duas vezes.
-    let ja_importada = std::fs::read_to_string(marcador)
-        .map(|v| v.trim() == versao_app)
-        .unwrap_or(false);
-    if ja_importada {
-        return Ok(Sincronizacao::EmDia);
-    }
-
-    // Conteúdo idêntico (caso típico da máquina master logo após publicar):
-    // não vale um backup de si mesmo.
-    if sha256_do_arquivo(banco_destino).ok() == sha256_do_arquivo(semente).ok()
-        && sha256_do_arquivo(semente).is_ok()
-    {
-        copiar_imagens_faltantes(imagens_destino, imagens_semente)?;
-        std::fs::write(marcador, versao_app)?;
-        return Ok(Sincronizacao::PuladoIdentico);
-    }
-
-    // Update de verdade: backup e substitui.
-    let backup = caminho_backup(banco_destino, versao_app);
-    std::fs::copy(banco_destino, &backup)?;
-    copiar_atomico(semente, banco_destino)?;
-    limpar_wal_orfao(banco_destino);
-    copiar_imagens_faltantes(imagens_destino, imagens_semente)?;
-    std::fs::write(marcador, versao_app)?;
-    Ok(Sincronizacao::Substituido(backup))
-}
-
-/// `rpg.db.bak-<versao_nova>-<epoch_segundos>` ao lado do banco. A versão no
-/// nome é a que SUBSTITUIU (a do instalador rodando) — é o que se procura na
-/// prática: "o update pra 0.3.0 comeu minha edição, cadê o banco de antes?".
-fn caminho_backup(banco: &Path, versao_app: &str) -> PathBuf {
-    let epoch = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    caminho_com_sufixo(banco, &format!(".bak-{versao_app}-{epoch}"))
-}
-
-fn sha256_do_arquivo(caminho: &Path) -> std::io::Result<[u8; 32]> {
-    let bytes = std::fs::read(caminho)?;
-    Ok(Sha256::digest(&bytes).into())
+    // Banco já tem dado do usuário: a semente NUNCA MAIS toca (Modelo A).
+    // Update do app é só update do app; dado só muda por sync explícita
+    // (ver db::sincronizacao_nuvem).
+    Ok(Sincronizacao::EmDia)
 }
 
 /// Verdadeiro só quando `banco` abre como SQLite e não tem nenhuma linha nas
@@ -309,46 +270,48 @@ mod tests {
         assert!(backups(&c).is_empty());
     }
 
+    /// Modelo A (2026-08-10): banco com dado do usuário é sempre no-op, mesmo
+    /// num update de verdade (marcador de versão antiga). A semente NUNCA MAIS
+    /// substitui depois do primeiro dado gravado — isso é o ponto central da
+    /// mudança de semântica, então este teste é o mais sensível do módulo.
     #[test]
-    fn update_substitui_banco_com_backup_e_atualiza_marcador() {
+    fn update_com_banco_de_dados_do_usuario_nao_sobrescreve() {
         let c = cenario("update", b"banco da versao nova");
         std::fs::write(&c.banco_destino, b"banco antigo com dados do usuario").unwrap();
         std::fs::write(&c.marcador, "0.1.0").unwrap();
 
         let r = sincronizar(&c, "0.2.0");
 
-        let Sincronizacao::Substituido(backup) = r else {
-            panic!("esperava Substituido, veio {r:?}");
-        };
-        assert_eq!(std::fs::read(&c.banco_destino).unwrap(), b"banco da versao nova");
-        assert_eq!(std::fs::read(&backup).unwrap(), b"banco antigo com dados do usuario");
-        assert!(backup.to_string_lossy().contains(".bak-0.2.0-"));
-        assert_eq!(std::fs::read_to_string(&c.marcador).unwrap(), "0.2.0");
+        assert_eq!(r, Sincronizacao::EmDia);
+        assert_eq!(std::fs::read(&c.banco_destino).unwrap(), b"banco antigo com dados do usuario");
+        assert!(backups(&c).is_empty(), "no-op não precisa de backup: nada foi substituído");
     }
 
     #[test]
-    fn banco_sem_marcador_mas_com_dado_e_tratado_como_update() {
+    fn banco_sem_marcador_mas_com_dado_tambem_nao_e_sobrescrito() {
         // máquina que instalou versão anterior ao marcador existir: tem dado,
-        // não tem marcador — precisa entrar na semântica nova (backup + troca).
+        // não tem marcador — mesmo assim entra no no-op (dado sempre vence).
         let c = cenario("sem_marcador", b"banco da versao nova");
         std::fs::write(&c.banco_destino, b"dados de antes do marcador existir").unwrap();
 
         let r = sincronizar(&c, "0.2.0");
 
-        assert!(matches!(r, Sincronizacao::Substituido(_)));
-        assert_eq!(backups(&c).len(), 1);
-        assert_eq!(std::fs::read(&c.banco_destino).unwrap(), b"banco da versao nova");
+        assert_eq!(r, Sincronizacao::EmDia);
+        assert!(backups(&c).is_empty());
+        assert_eq!(
+            std::fs::read(&c.banco_destino).unwrap(),
+            b"dados de antes do marcador existir"
+        );
     }
 
     #[test]
-    fn conteudo_identico_so_atualiza_marcador_sem_backup() {
+    fn conteudo_identico_ao_da_semente_tambem_e_no_op() {
         let c = cenario("identico", b"mesmo conteudo dos dois lados");
         std::fs::write(&c.banco_destino, b"mesmo conteudo dos dois lados").unwrap();
         std::fs::write(&c.marcador, "0.1.0").unwrap();
 
-        assert_eq!(sincronizar(&c, "0.2.0"), Sincronizacao::PuladoIdentico);
+        assert_eq!(sincronizar(&c, "0.2.0"), Sincronizacao::EmDia);
         assert!(backups(&c).is_empty());
-        assert_eq!(std::fs::read_to_string(&c.marcador).unwrap(), "0.2.0");
     }
 
     #[test]
@@ -384,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn banco_com_personagem_e_substituido_no_update_mas_preservado_no_backup() {
+    fn banco_com_personagem_nunca_e_sobrescrito_pela_semente() {
         let c = cenario("com_personagem", b"snapshot novo do master");
         {
             let conn = crate::db::connection::open(&c.banco_destino).unwrap();
@@ -396,27 +359,23 @@ mod tests {
 
         let r = sincronizar(&c, "0.2.0");
 
-        let Sincronizacao::Substituido(backup) = r else {
-            panic!("esperava Substituido, veio {r:?}");
-        };
-        assert_eq!(std::fs::read(&c.banco_destino).unwrap(), b"snapshot novo do master");
-        assert_eq!(std::fs::read(&backup).unwrap(), bytes_antes);
+        assert_eq!(r, Sincronizacao::EmDia);
+        assert_eq!(std::fs::read(&c.banco_destino).unwrap(), bytes_antes);
+        assert!(backups(&c).is_empty());
     }
 
     #[test]
-    fn arquivo_que_nao_e_sqlite_ganha_backup_antes_de_ser_substituido() {
+    fn arquivo_que_nao_e_sqlite_tambem_conta_como_tem_dado_e_fica_intocado() {
         let c = cenario("nao_sqlite", b"semente saudavel");
         let lixo: &[u8] = &[0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01, 0x02, 0xFF];
         std::fs::write(&c.banco_destino, lixo).unwrap();
 
         let r = sincronizar(&c, "0.2.0");
 
-        // corrompido conta como "tem dado" -> backup preserva a evidência
-        let Sincronizacao::Substituido(backup) = r else {
-            panic!("esperava Substituido, veio {r:?}");
-        };
-        assert_eq!(std::fs::read(&backup).unwrap(), lixo);
-        assert_eq!(std::fs::read(&c.banco_destino).unwrap(), b"semente saudavel");
+        // corrompido conta como "tem dado" (por precaução) -> no-op, não vira semente
+        assert_eq!(r, Sincronizacao::EmDia);
+        assert_eq!(std::fs::read(&c.banco_destino).unwrap(), lixo);
+        assert!(backups(&c).is_empty());
     }
 
     #[test]

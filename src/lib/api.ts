@@ -12,8 +12,10 @@ import type {
   EstadoBatalha,
   Etiqueta,
   EtiquetaInput,
+  EventoBootSync,
   Favorito,
   FavoritoInput,
+  GoogleStatus,
   InfoConexao,
   Mapa,
   MapaInput,
@@ -27,8 +29,11 @@ import type {
   PersonagemResumo,
   PoolNome,
   ResultadoImport,
+  SyncResultado,
+  SyncStatus,
   Tipo,
   TipoTraco,
+  TipoTransporte,
 } from "./types";
 
 /** Lista personagens do banco; `tipo` null = todos. */
@@ -414,3 +419,61 @@ export const segredosStatus = () => invoke<string>("segredos_status", {});
 /** Destrava o cofre com a senha-mestra (1x por máquina). Erro = senha incorreta. */
 export const segredosDestravar = (senha: string) =>
   invoke<void>("segredos_destravar", { senha });
+
+/* -------------------------- Sync de nuvem -------------------------- */
+// Ver docs/plans/2026-08-10-sync-nuvem.md. Pasta escolhida pelo usuário via
+// diálogo nativo (tauri-plugin-dialog); os comandos só recebem o caminho.
+
+/** Grava a pasta da nuvem escolhida (dialog nativo, fora daqui). */
+export const syncDefinirPasta = (caminho: string) =>
+  invoke<void>("sync_definir_pasta", { caminho });
+
+/** Pasta salva atualmente; null = ainda não configurada. */
+export const syncPastaAtual = () => invoke<string | null>("sync_pasta_atual", {});
+
+/** Compara carimbo local x manifesto da nuvem e devolve a ação sugerida. */
+export const syncStatus = () => invoke<SyncStatus>("sync_status", {});
+
+/** Grava o pacote na nuvem. `forcar` pula o aviso "por cima de algo mais novo". */
+export const syncEnviar = (forcar: boolean) =>
+  invoke<SyncResultado>("sync_enviar", { forcar });
+
+/** Baixa o pacote da nuvem e substitui o banco local (com backup). `forcar` pula os avisos. */
+export const syncBaixar = (forcar: boolean) =>
+  invoke<SyncResultado>("sync_baixar", { forcar });
+
+/**
+ * O que a sincronização automática do boot fez (Fase 3): lê e zera o evento
+ * gravado no `setup()` do Tauri — só volta diferente de `{ tipo: "nenhum" }`
+ * uma vez por sessão, no primeiro render depois de abrir o app.
+ */
+export const syncEventoBoot = () => invoke<EventoBootSync>("sync_evento_boot", {});
+
+/**
+ * Chave espelhando `CHAVE_SYNC_TRANSPORTE` (Rust, `db::sincronizacao_nuvem`).
+ * Sem comando dedicado: `config_get`/`config_set` (já genéricos) bastam — só
+ * duas telas escrevem aqui, então validar o valor no backend não paga a pena
+ * ainda (Fase 4, docs/plans/2026-08-11-sync-google-drive.md).
+ */
+const CHAVE_SYNC_TRANSPORTE = "sync_transporte";
+
+/** Transporte configurado; `null`/valor desconhecido cai em `"pasta"` (default do Rust). */
+export const syncTransporteAtual = async (): Promise<TipoTransporte> =>
+  (await configGet(CHAVE_SYNC_TRANSPORTE)) === "drive" ? "drive" : "pasta";
+
+/** Troca o transporte usado por `sync_enviar`/`sync_baixar`/o boot. */
+export const syncDefinirTransporte = (tipo: TipoTransporte) =>
+  configSet(CHAVE_SYNC_TRANSPORTE, tipo);
+
+/* ---------------------- Sync via Google Drive (transporte) ---------------------- */
+// Ver docs/plans/2026-08-11-sync-google-drive.md. Fase 1: só login/status/logout —
+// o access token nunca cruza pro TS, fica só no Rust (`google::auth`).
+
+/** Abre o navegador pro login Google (OAuth2+PKCE); devolve o e-mail conectado. */
+export const googleLogin = () => invoke<string>("google_login", {});
+
+/** Situação da conexão: conectado + e-mail, ou desconectado. Nunca inclui token. */
+export const googleStatus = () => invoke<GoogleStatus>("google_status", {});
+
+/** Esquece a conta (apaga o refresh token do Gerenciador de Credenciais). */
+export const googleLogout = () => invoke<void>("google_logout", {});

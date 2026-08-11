@@ -8,6 +8,7 @@ import {
   IconFichas,
   IconNotas,
   IconPanel,
+  IconSync,
 } from "./icons";
 
 type ItemNav = {
@@ -26,6 +27,7 @@ const ITENS: ItemNav[] = [
   { id: "notas", label: "Notas", icon: IconNotas, to: "/notas" },
   { id: "compendio", label: "Compêndio", icon: IconCompendio, to: "/compendio" },
   { id: "balanceamento", label: "Balanceamento", icon: IconBalanceamento, to: "/balanceamento" },
+  { id: "sync", label: "Sincronização", icon: IconSync, to: "/sync" },
   { id: "configuracoes", label: "Configurações", icon: IconConfiguracoes, to: "/configuracoes" },
 ];
 

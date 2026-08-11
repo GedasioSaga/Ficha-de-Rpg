@@ -47,6 +47,12 @@ pub const CONFIG_CHAVES_GEMINI: &str = "gemini_api_keys";
 pub struct Segredos {
     pub discord_token: Option<String>,
     pub gemini_api_keys: Option<String>,
+    /// Credenciais do app OAuth do Google (sync via Drive,
+    /// docs/plans/2026-08-11-sync-google-drive.md). Ao contrário das chaves
+    /// Gemini, NÃO vão pra tabela `config` do banco — credencial de app não é
+    /// dado do usuário, fica só em memória vinda do cofre (`google_credenciais`).
+    pub google_client_id: Option<String>,
+    pub google_client_secret: Option<String>,
 }
 
 /// Cache local por máquina: chave derivada (pra re-importar blob futuro sem
@@ -70,6 +76,17 @@ impl CofreState {
     /// Token do Discord, se o cofre estiver destravado e o tiver.
     pub fn discord_token(&self) -> Option<String> {
         self.0.lock().ok()?.as_ref()?.discord_token.clone()
+    }
+
+    /// `client_id`/`client_secret` do app OAuth do Google, se o cofre estiver
+    /// destravado e os dois estiverem presentes. Usado pelo módulo
+    /// `google::auth` em runtime — nunca cruza pro TS.
+    pub fn google_credenciais(&self) -> Option<(String, String)> {
+        let guarda = self.0.lock().ok()?;
+        let segredos = guarda.as_ref()?;
+        let id = segredos.google_client_id.clone()?;
+        let secret = segredos.google_client_secret.clone()?;
+        Some((id, secret))
     }
 }
 
@@ -290,12 +307,16 @@ mod tests {
         let segredos = Segredos {
             discord_token: Some("token-de-teste".into()),
             gemini_api_keys: Some("chave1,chave2".into()),
+            google_client_id: Some("client-id-teste".into()),
+            google_client_secret: Some("client-secret-teste".into()),
         };
         let blob = cifrar_para_teste(&segredos, "senha forte", &[7u8; 16], &[9u8; 12]);
 
         let (aberto, chave) = decifrar_com_senha(&blob, "senha forte").unwrap();
         assert_eq!(aberto.discord_token.as_deref(), Some("token-de-teste"));
         assert_eq!(aberto.gemini_api_keys.as_deref(), Some("chave1,chave2"));
+        assert_eq!(aberto.google_client_id.as_deref(), Some("client-id-teste"));
+        assert_eq!(aberto.google_client_secret.as_deref(), Some("client-secret-teste"));
 
         // a chave derivada reabre o blob sozinha (caminho do re-import silencioso)
         let de_novo = decifrar_com_chave(&blob, &chave).unwrap();
@@ -332,8 +353,10 @@ mod tests {
         let (segredos, _) = decifrar_com_senha(&blob, "teste-cross-impl").unwrap();
         assert_eq!(segredos.discord_token.as_deref(), Some("tok-node"));
         assert_eq!(segredos.gemini_api_keys.as_deref(), Some("g1,g2"));
+        assert_eq!(segredos.google_client_id.as_deref(), Some("cid-node"));
+        assert_eq!(segredos.google_client_secret.as_deref(), Some("csec-node"));
     }
 
     // Gerado por: node scripts/segredos-cifrar.mjs --auto-teste
-    const BLOB_DO_NODE_HEX: &str = "525047534547310aababababababababababababababababcdcdcdcdcdcdcdcdcdcdcdcd0e8efedcc196761b38260d1d4b9d5c6120cfffc46fb72900f3223cd8a27b8d02408e0efe0409e445639b5f504932de27974e1123f0e3bfe6d5348ab34966811ea450458662ac";
+    const BLOB_DO_NODE_HEX: &str = "525047534547310aababababababababababababababababcdcdcdcdcdcdcdcdcdcdcdcd0e8efedcc196761b38260d1d4b9d5c6120cfffc46fb72900f3223cd8a27b8d02408e0efe0409e445639b5f504932de27974e1123f0b208d5f1e0925e075298bd605577ac45aaddf79ad65b3120c8d5fd9c4e305f85e5097a2e9e9ff19e375350256d630bfbd56a1440aaad197b3f72e5832870de3b5312449dc85ac39d1fdc96f5bdf58d7e8a7d";
 }

@@ -9,6 +9,7 @@ import NotasScreen from "./features/notas/NotasScreen";
 import CompendioScreen from "./features/compendio/CompendioScreen";
 import BalanceamentoScreen from "./features/balanceamento/BalanceamentoScreen";
 import ConfiguracoesScreen from "./features/configuracoes/ConfiguracoesScreen";
+import SyncTela from "./features/sync/SyncTela";
 import JanelaPlayer from "./features/batalha/JanelaPlayer";
 
 /**
@@ -39,6 +40,7 @@ export default function App() {
         <Route path="/compendio" element={<CompendioScreen />} />
         <Route path="/balanceamento" element={<BalanceamentoScreen />} />
         <Route path="/configuracoes" element={<ConfiguracoesScreen />} />
+        <Route path="/sync" element={<SyncTela />} />
       </Route>
     </Routes>
   );
