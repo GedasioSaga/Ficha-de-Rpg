@@ -466,8 +466,9 @@ pub fn identidade_local_restaurar(conn: &Connection, identidade: &IdentidadeLoca
 
 /// `datetime('now')` da conexão do SQLite — mesma origem/formato de
 /// `atualizado_em`, então comparar strings com [`banco_esta_sujo`] não sofre
-/// de deriva de relógio entre o app e o SQLite.
-fn sqlite_agora(conn: &Connection) -> Result<String, AppError> {
+/// de deriva de relógio entre o app e o SQLite. `pub` porque `lib.rs` lê isto
+/// na Fase 1 (lock breve) de `sync_enviar`, ANTES da rede de `enviar`.
+pub fn sqlite_agora(conn: &Connection) -> Result<String, AppError> {
     conn.query_row("SELECT datetime('now')", [], |r| r.get(0)).map_err(AppError::from)
 }
 
@@ -545,18 +546,41 @@ impl SyncResultado {
 /// Vira `async` por causa disso; o teto de tempo vem do timeout do
 /// `reqwest::Client` (FIX A) — não trava o boot/tela mesmo com Drive fora do
 /// ar.
-pub async fn status(conn: &Connection, transporte: &dyn Transporte) -> Result<SyncStatus, AppError> {
-    let carimbo = carimbo_ler(conn)?;
+///
+/// Deadlock de I/O de rede sob o Mutex do banco (docs/plans/2026-08-11-sync-google-drive.md,
+/// fix pós-Fase 3): esta função NÃO recebe mais `&Connection` — só
+/// `carimbo`/`sujo` já lidos por quem chama. Garantia estrutural: como a
+/// assinatura não tem `Connection` em lugar nenhum, é impossível segurar o
+/// `MutexGuard<Connection>` do `Db` gerenciado durante o `.await` de rede
+/// (`transporte.ler_manifesto()`) daqui pra dentro — o compilador não
+/// deixaria compilar um `conn` que este código nem enxerga.
+pub async fn status(
+    carimbo: &CarimboLocal,
+    sujo: bool,
+    transporte: &dyn Transporte,
+) -> Result<SyncStatus, AppError> {
     let nuvem = transporte.ler_manifesto().await?;
-    let sujo = banco_esta_sujo(conn)?;
     let acao = decidir_acao(Carimbo { contador: carimbo.contador }, nuvem.as_ref(), sujo);
     Ok(SyncStatus {
         acao,
         contador_nuvem: nuvem.map(|m| m.contador),
         contador_local: carimbo.contador,
         sujo,
-        hora: carimbo.hora,
+        hora: carimbo.hora.clone(),
     })
+}
+
+/// O que `enviar` decidiu, devolvido SEM gravar nada no banco — quem chama
+/// (`lib.rs`) grava o carimbo (ver [`finalizar_enviar`]) já com o `Mutex` do
+/// `Db` travado de novo, DEPOIS que a rede (dentro de `enviar`) já terminou e
+/// soltou. `agora` só atravessa esta função de volta pra quem chamou; nunca é
+/// lido daqui (ver doc de [`enviar`]).
+pub enum PlanoEnvio {
+    /// Guarda leve recusou (nada foi publicado); a UI só mostra a mensagem.
+    Recusado(SyncResultado),
+    /// Publicado com sucesso: o carimbo a gravar e o backup remoto, se houve
+    /// (FIX5).
+    Enviado { novo_contador: i64, agora: String, backup: Option<String> },
 }
 
 /// Envia o estado local pro pacote no transporte configurado (plano §4
@@ -564,15 +588,24 @@ pub async fn status(conn: &Connection, transporte: &dyn Transporte) -> Result<Sy
 /// leve: se o lado remoto já tem contador maior que o local e `forcar` é
 /// falso, recusa com o aviso "por cima de algo mais novo"; `forcar=true`
 /// sobrescreve mesmo assim (com backup do pacote antigo do lado remoto —
-/// FIX5). Em sucesso, atualiza o carimbo local.
+/// FIX5).
+///
+/// Deadlock de I/O de rede sob o Mutex do banco (docs/plans/2026-08-11-sync-google-drive.md,
+/// fix pós-Fase 3): esta função NÃO recebe mais `&Connection` — `carimbo` e
+/// `agora` já vêm lidos por quem chama, e ela NÃO grava carimbo nenhum
+/// (devolve [`PlanoEnvio`] pra quem chama gravar, com o Mutex travado de novo
+/// só depois da rede). Garantia estrutural: sem `Connection` na assinatura, o
+/// `MutexGuard` do `Db` gerenciado não pode atravessar o `.await` de rede
+/// (`ler_manifesto`/`backup_remoto_se_existir`/`publicar_pacote`) que mora
+/// aqui dentro — o compilador não teria como.
 pub async fn enviar(
-    conn: &Connection,
+    carimbo: &CarimboLocal,
+    agora: &str,
     banco_vivo: &Path,
     imagens_dir: &Path,
     transporte: &dyn Transporte,
     forcar: bool,
-) -> Result<SyncResultado, AppError> {
-    let carimbo = carimbo_ler(conn)?;
+) -> Result<PlanoEnvio, AppError> {
     let nuvem = transporte.ler_manifesto().await?;
     let nuvem_mais_nova_que_local = match &nuvem {
         Some(n) => n.contador > carimbo.contador,
@@ -580,10 +613,10 @@ pub async fn enviar(
     };
 
     if !forcar && nuvem_mais_nova_que_local {
-        return Ok(SyncResultado::recusado(format!(
+        return Ok(PlanoEnvio::Recusado(SyncResultado::recusado(format!(
             "enviando por cima de algo mais novo na nuvem (v{})",
             nuvem.expect("nuvem_mais_nova_que_local só é true com nuvem Some").contador
-        )));
+        ))));
     }
 
     // FIX5: `forcar` por cima de uma nuvem mais nova — backup do pacote atual
@@ -596,7 +629,7 @@ pub async fn enviar(
     let manifesto = Manifesto {
         contador: novo_contador,
         epoch: epoch_agora(),
-        machine_id: carimbo.machine_id.unwrap_or_default(),
+        machine_id: carimbo.machine_id.clone().unwrap_or_default(),
         hash_dados: hash_arquivo(banco_vivo)?,
         versao_app: env!("CARGO_PKG_VERSION").to_string(),
         schema_pacote: SCHEMA_PACOTE_ATUAL,
@@ -619,14 +652,25 @@ pub async fn enviar(
     let _ = std::fs::remove_file(staging_pacote.with_extension("tmp"));
     resultado?;
 
-    let agora = sqlite_agora(conn)?;
-    carimbo_gravar(conn, novo_contador, &agora)?;
+    Ok(PlanoEnvio::Enviado { novo_contador, agora: agora.to_string(), backup: backup_nuvem })
+}
 
+/// Grava o carimbo local após um `enviar` bem-sucedido e monta o
+/// `SyncResultado` — espelha [`finalizar_baixar`]. Chamado por quem chamou
+/// `enviar` (`lib.rs`), com o Mutex do `Db` travado de novo (rede já
+/// terminou).
+pub fn finalizar_enviar(
+    conn: &Connection,
+    novo_contador: i64,
+    agora: &str,
+    backup: Option<String>,
+) -> Result<SyncResultado, AppError> {
+    carimbo_gravar(conn, novo_contador, agora)?;
     Ok(SyncResultado {
         sucesso: true,
         mensagem: format!("enviado (v{novo_contador})"),
         contador: Some(novo_contador),
-        backup: backup_nuvem,
+        backup,
     })
 }
 
@@ -668,8 +712,15 @@ pub enum PlanoBaixar {
 /// abstrai pasta local ou Google Drive): sem pacote remoto, já em dia, local
 /// mais novo, ou sujo (conflito) recusam; senão libera aplicar. `forcar=true`
 /// pula todas as guardas exceto "sem pacote".
+///
+/// Deadlock de I/O de rede sob o Mutex do banco (docs/plans/2026-08-11-sync-google-drive.md,
+/// fix pós-Fase 3): esta função NÃO recebe mais `&Connection` — `carimbo` e
+/// `sujo` já vêm lidos por quem chama. Garantia estrutural: sem `Connection`
+/// na assinatura, o `MutexGuard` do `Db` gerenciado não pode atravessar o
+/// `.await` de rede (`ler_manifesto`) que mora aqui dentro.
 pub async fn planejar_baixar(
-    conn: &Connection,
+    carimbo: &CarimboLocal,
+    sujo: bool,
     transporte: &dyn Transporte,
     forcar: bool,
 ) -> Result<PlanoBaixar, AppError> {
@@ -684,8 +735,6 @@ pub async fn planejar_baixar(
     // lógica de conflito duplicada aqui, que não passava pelo caso
     // `contador==0` do FIX4 — a primeira sync manual (máquina nova, semente
     // marca "sujo") caía em falso conflito. Uma fonte só pros dois caminhos.
-    let carimbo = carimbo_ler(conn)?;
-    let sujo = banco_esta_sujo(conn)?;
     match decidir_acao(Carimbo { contador: carimbo.contador }, Some(&nuvem), sujo) {
         Acao::NuvemMaisNova => Ok(PlanoBaixar::Aplicar(nuvem)),
         Acao::Conflito => Ok(PlanoBaixar::Recusar(SyncResultado::recusado(format!(
@@ -727,12 +776,18 @@ pub enum PlanoBoot {
 /// roda [`decidir_acao`]. Não aplica nada — só decide. Espelha
 /// `planejar_baixar`, mas sem `forcar` (o boot nunca força) e mapeando
 /// `Conflito` pro seu próprio caso em vez de recusar com mensagem.
-pub async fn planejar_boot(conn: &Connection, transporte: &dyn Transporte) -> Result<PlanoBoot, AppError> {
+///
+/// Mesma garantia estrutural de [`planejar_baixar`]/[`status`]/[`enviar`]:
+/// não recebe `&Connection`, então o `.await` de rede (`ler_manifesto`) não
+/// pode acontecer com o `MutexGuard` do `Db` travado.
+pub async fn planejar_boot(
+    carimbo: &CarimboLocal,
+    sujo: bool,
+    transporte: &dyn Transporte,
+) -> Result<PlanoBoot, AppError> {
     let Some(nuvem) = transporte.ler_manifesto().await? else {
         return Ok(PlanoBoot::Nenhum);
     };
-    let carimbo = carimbo_ler(conn)?;
-    let sujo = banco_esta_sujo(conn)?;
     match decidir_acao(Carimbo { contador: carimbo.contador }, Some(&nuvem), sujo) {
         Acao::NuvemMaisNova => Ok(PlanoBoot::Aplicar(nuvem)),
         Acao::Conflito => Ok(PlanoBoot::Conflito(nuvem)),
@@ -740,11 +795,11 @@ pub async fn planejar_boot(conn: &Connection, transporte: &dyn Transporte) -> Re
     }
 }
 
-/// O que aconteceu no boot (Fase 3), guardado em estado gerenciado
-/// (`SyncBootState` em `lib.rs`) pra tela ler no primeiro render — o `setup()`
-/// do Tauri não tem UI pra abrir o diálogo de conflito nem disparar um toast.
-/// `tipo` é o discriminante no JSON (`#[serde(tag = "tipo")]`); o comando
-/// `sync_evento_boot` lê e zera (`Nenhum`), então só aparece uma vez por boot.
+/// O que aconteceu na verificação de boot (Fase 3): devolvido direto pelo
+/// comando `sync_verificar_boot` (`lib.rs`), chamado pelo frontend depois do
+/// render — não roda mais dentro do `.setup()` do Tauri, que não tem UI pra
+/// abrir o diálogo de conflito nem disparar um toast. `tipo` é o
+/// discriminante no JSON (`#[serde(tag = "tipo")]`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(tag = "tipo", rename_all = "snake_case")]
 pub enum EventoBootSync {
@@ -1117,6 +1172,51 @@ mod tests {
         }
     }
 
+    /// Helpers de teste que espelham o faseamento do Mutex que `lib.rs` faz
+    /// nos comandos reais (fix pós-Fase 3,
+    /// docs/plans/2026-08-11-sync-google-drive.md): lê `carimbo`/`sujo` do
+    /// `conn` de teste (Fase 1 — "lock breve"), chama a função async que NÃO
+    /// recebe mais `Connection` (Fase 2 — "rede sem lock"), e grava o carimbo
+    /// no fim quando aplicável (Fase 3 — "lock breve" de novo). Existem só
+    /// pra manter os testes de comportamento legíveis; a garantia estrutural
+    /// em si (rede sem `Connection` na assinatura) já está provada pelo
+    /// próprio `enviar`/`status`/`planejar_baixar`/`planejar_boot` compilarem
+    /// sem o parâmetro.
+    fn status_teste(conn: &Connection, transporte: &dyn Transporte) -> SyncStatus {
+        let carimbo = carimbo_ler(conn).unwrap();
+        let sujo = banco_esta_sujo(conn).unwrap();
+        bloquear(status(&carimbo, sujo, transporte)).unwrap()
+    }
+
+    fn enviar_teste(
+        conn: &Connection,
+        banco_vivo: &Path,
+        imagens_dir: &Path,
+        transporte: &dyn Transporte,
+        forcar: bool,
+    ) -> SyncResultado {
+        let carimbo = carimbo_ler(conn).unwrap();
+        let agora = sqlite_agora(conn).unwrap();
+        match bloquear(enviar(&carimbo, &agora, banco_vivo, imagens_dir, transporte, forcar)).unwrap() {
+            PlanoEnvio::Recusado(r) => r,
+            PlanoEnvio::Enviado { novo_contador, agora, backup } => {
+                finalizar_enviar(conn, novo_contador, &agora, backup).unwrap()
+            }
+        }
+    }
+
+    fn planejar_baixar_teste(conn: &Connection, transporte: &dyn Transporte, forcar: bool) -> PlanoBaixar {
+        let carimbo = carimbo_ler(conn).unwrap();
+        let sujo = banco_esta_sujo(conn).unwrap();
+        bloquear(planejar_baixar(&carimbo, sujo, transporte, forcar)).unwrap()
+    }
+
+    fn planejar_boot_teste(conn: &Connection, transporte: &dyn Transporte) -> PlanoBoot {
+        let carimbo = carimbo_ler(conn).unwrap();
+        let sujo = banco_esta_sujo(conn).unwrap();
+        bloquear(planejar_boot(&carimbo, sujo, transporte)).unwrap()
+    }
+
     /* ------------------------------ decidir_acao ------------------------------ */
 
     #[test]
@@ -1348,7 +1448,7 @@ mod tests {
     #[test]
     fn status_sem_pasta_e_sem_dado_e_sem_nuvem() {
         let (raiz, conn) = app_data_teste("status_sem_nuvem");
-        let s = bloquear(status(&conn, &TransportePasta::new(raiz.join("nuvem")))).unwrap();
+        let s = status_teste(&conn, &TransportePasta::new(raiz.join("nuvem")));
         assert_eq!(s.acao, Acao::SemNuvem);
         assert_eq!(s.contador_local, 0);
         assert_eq!(s.contador_nuvem, None);
@@ -1375,7 +1475,7 @@ mod tests {
         montar_pacote(&banco_vivo, &imagens, &pacote, &manifesto_teste(4)).unwrap();
         bloquear(transporte.publicar_pacote(&pacote)).unwrap();
 
-        let s = bloquear(status(&conn, &transporte)).unwrap();
+        let s = status_teste(&conn, &transporte);
         assert_eq!(s.acao, Acao::NuvemMaisNova, "pacote real no transporte não pode virar SemNuvem");
         assert_eq!(s.contador_nuvem, Some(4));
     }
@@ -1388,8 +1488,7 @@ mod tests {
         let imagens = raiz.join("app_data").join("images");
         let pasta_nuvem = raiz.join("nuvem");
 
-        let r =
-            bloquear(enviar(&conn, &banco_vivo, &imagens, &TransportePasta::new(&pasta_nuvem), false)).unwrap();
+        let r = enviar_teste(&conn, &banco_vivo, &imagens, &TransportePasta::new(&pasta_nuvem), false);
 
         assert!(r.sucesso);
         assert_eq!(r.contador, Some(1));
@@ -1406,8 +1505,7 @@ mod tests {
         std::fs::create_dir_all(&pasta_nuvem).unwrap();
         montar_pacote(&banco_vivo, &imagens, &caminho_pacote(&pasta_nuvem), &manifesto_teste(5)).unwrap();
 
-        let r =
-            bloquear(enviar(&conn, &banco_vivo, &imagens, &TransportePasta::new(&pasta_nuvem), false)).unwrap();
+        let r = enviar_teste(&conn, &banco_vivo, &imagens, &TransportePasta::new(&pasta_nuvem), false);
 
         assert!(!r.sucesso);
         assert_eq!(carimbo_ler(&conn).unwrap().contador, 0, "recusado não deve avançar o carimbo");
@@ -1422,8 +1520,7 @@ mod tests {
         std::fs::create_dir_all(&pasta_nuvem).unwrap();
         montar_pacote(&banco_vivo, &imagens, &caminho_pacote(&pasta_nuvem), &manifesto_teste(5)).unwrap();
 
-        let r =
-            bloquear(enviar(&conn, &banco_vivo, &imagens, &TransportePasta::new(&pasta_nuvem), true)).unwrap();
+        let r = enviar_teste(&conn, &banco_vivo, &imagens, &TransportePasta::new(&pasta_nuvem), true);
 
         assert!(r.sucesso);
         assert_eq!(r.contador, Some(6), "novo = max(local, nuvem) + 1");
@@ -1442,8 +1539,7 @@ mod tests {
         montar_pacote(&banco_vivo, &imagens, &caminho_pacote(&pasta_nuvem), &manifesto_teste(5)).unwrap();
         let conteudo_antigo = std::fs::read(caminho_pacote(&pasta_nuvem)).unwrap();
 
-        let r =
-            bloquear(enviar(&conn, &banco_vivo, &imagens, &TransportePasta::new(&pasta_nuvem), true)).unwrap();
+        let r = enviar_teste(&conn, &banco_vivo, &imagens, &TransportePasta::new(&pasta_nuvem), true);
 
         assert!(r.sucesso);
         let backup = r.backup.expect("forcar por cima de nuvem mais nova deve gerar backup");
@@ -1469,8 +1565,7 @@ mod tests {
         let imagens = raiz.join("app_data").join("images");
         let pasta_nuvem = raiz.join("nuvem");
 
-        let r =
-            bloquear(enviar(&conn, &banco_vivo, &imagens, &TransportePasta::new(&pasta_nuvem), false)).unwrap();
+        let r = enviar_teste(&conn, &banco_vivo, &imagens, &TransportePasta::new(&pasta_nuvem), false);
         assert!(r.sucesso);
 
         let staging_dir = raiz.join("app_data").join("sync_tmp");
@@ -1493,7 +1588,7 @@ mod tests {
     #[test]
     fn planejar_baixar_sem_pacote_recusa() {
         let (raiz, conn) = app_data_teste("baixar_sem_pacote");
-        match bloquear(planejar_baixar(&conn, &TransportePasta::new(raiz.join("nuvem")), false)).unwrap() {
+        match planejar_baixar_teste(&conn, &TransportePasta::new(raiz.join("nuvem")), false) {
             PlanoBaixar::Recusar(r) => assert!(!r.sucesso),
             PlanoBaixar::Aplicar(_) => panic!("não devia liberar aplicar sem pacote"),
         }
@@ -1513,7 +1608,7 @@ mod tests {
         .unwrap();
         carimbo_gravar(&conn, 3, "2026-08-10 10:00:00").unwrap();
 
-        match bloquear(planejar_baixar(&conn, &TransportePasta::new(&pasta_nuvem), false)).unwrap() {
+        match planejar_baixar_teste(&conn, &TransportePasta::new(&pasta_nuvem), false) {
             PlanoBaixar::Recusar(r) => assert!(!r.sucesso),
             PlanoBaixar::Aplicar(_) => panic!("em dia não devia liberar aplicar"),
         }
@@ -1533,7 +1628,7 @@ mod tests {
         .unwrap();
         carimbo_gravar(&conn, 3, "2026-08-10 10:00:00").unwrap();
 
-        match bloquear(planejar_baixar(&conn, &TransportePasta::new(&pasta_nuvem), false)).unwrap() {
+        match planejar_baixar_teste(&conn, &TransportePasta::new(&pasta_nuvem), false) {
             PlanoBaixar::Aplicar(m) => assert_eq!(m.contador, 4),
             PlanoBaixar::Recusar(r) => panic!("devia liberar aplicar, recusou: {}", r.mensagem),
         }
@@ -1554,7 +1649,7 @@ mod tests {
         carimbo_gravar(&conn, 3, "2026-08-10 10:00:00").unwrap();
         conn.execute("INSERT INTO nota (titulo, corpo) VALUES ('t', 'c')", []).unwrap();
 
-        match bloquear(planejar_baixar(&conn, &TransportePasta::new(&pasta_nuvem), false)).unwrap() {
+        match planejar_baixar_teste(&conn, &TransportePasta::new(&pasta_nuvem), false) {
             PlanoBaixar::Recusar(r) => assert!(r.mensagem.contains("mudanças locais")),
             PlanoBaixar::Aplicar(_) => panic!("local sujo não pode baixar sozinho"),
         }
@@ -1581,7 +1676,7 @@ mod tests {
         conn.execute("INSERT INTO nota (titulo, corpo) VALUES ('t', 'c')", []).unwrap();
         assert!(banco_esta_sujo(&conn).unwrap(), "pré-condição: local sujo");
 
-        match bloquear(planejar_baixar(&conn, &TransportePasta::new(&pasta_nuvem), false)).unwrap() {
+        match planejar_baixar_teste(&conn, &TransportePasta::new(&pasta_nuvem), false) {
             PlanoBaixar::Aplicar(m) => assert_eq!(m.contador, 4),
             PlanoBaixar::Recusar(r) => panic!("primeira sync devia aplicar, recusou: {}", r.mensagem),
         }
@@ -1601,7 +1696,7 @@ mod tests {
     fn planejar_boot_pasta_definida_sem_pacote_na_nuvem_nao_faz_nada() {
         let (raiz, conn) = app_data_teste("boot_sem_pacote");
         let pasta_nuvem = raiz.join("nuvem");
-        match bloquear(planejar_boot(&conn, &TransportePasta::new(&pasta_nuvem))).unwrap() {
+        match planejar_boot_teste(&conn, &TransportePasta::new(&pasta_nuvem)) {
             PlanoBoot::Nenhum => {}
             _ => panic!("sem pacote na nuvem não deve decidir nada"),
         }
@@ -1621,7 +1716,7 @@ mod tests {
         .unwrap();
         carimbo_gravar(&conn, 3, "2026-08-10 10:00:00").unwrap();
 
-        match bloquear(planejar_boot(&conn, &TransportePasta::new(&pasta_nuvem))).unwrap() {
+        match planejar_boot_teste(&conn, &TransportePasta::new(&pasta_nuvem)) {
             PlanoBoot::Nenhum => {}
             _ => panic!("em dia não deve decidir nada"),
         }
@@ -1641,7 +1736,7 @@ mod tests {
         .unwrap();
         carimbo_gravar(&conn, 3, "2026-08-10 10:00:00").unwrap();
 
-        match bloquear(planejar_boot(&conn, &TransportePasta::new(&pasta_nuvem))).unwrap() {
+        match planejar_boot_teste(&conn, &TransportePasta::new(&pasta_nuvem)) {
             PlanoBoot::Aplicar(m) => assert_eq!(m.contador, 4),
             _ => panic!("nuvem mais nova + local limpo devia liberar aplicar"),
         }
@@ -1662,7 +1757,7 @@ mod tests {
         carimbo_gravar(&conn, 3, "2026-08-10 10:00:00").unwrap();
         conn.execute("INSERT INTO nota (titulo, corpo) VALUES ('t', 'c')", []).unwrap();
 
-        match bloquear(planejar_boot(&conn, &TransportePasta::new(&pasta_nuvem))).unwrap() {
+        match planejar_boot_teste(&conn, &TransportePasta::new(&pasta_nuvem)) {
             PlanoBoot::Conflito(m) => assert_eq!(m.contador, 4),
             PlanoBoot::Aplicar(_) => panic!("boot NUNCA pode aplicar por cima de local sujo"),
             PlanoBoot::Nenhum => panic!("devia sinalizar conflito, não ficar em silêncio"),
@@ -1683,7 +1778,7 @@ mod tests {
         .unwrap();
         carimbo_gravar(&conn, 5, "2026-08-10 10:00:00").unwrap();
 
-        match bloquear(planejar_boot(&conn, &TransportePasta::new(&pasta_nuvem))).unwrap() {
+        match planejar_boot_teste(&conn, &TransportePasta::new(&pasta_nuvem)) {
             PlanoBoot::Nenhum => {}
             _ => panic!("local mais novo não deve decidir nada"),
         }
@@ -1864,7 +1959,7 @@ mod tests {
         let imagens = raiz.join("app_data").join("images");
         let transporte = FakeTransporte::vazio(raiz.join("fake_local"));
 
-        let r = bloquear(enviar(&conn, &banco_vivo, &imagens, &transporte, false)).unwrap();
+        let r = enviar_teste(&conn, &banco_vivo, &imagens, &transporte, false);
 
         assert!(r.sucesso);
         assert_eq!(r.contador, Some(1));
@@ -1895,7 +1990,7 @@ mod tests {
         .unwrap();
         bloquear(transporte.publicar_pacote(&pacote_alheio)).unwrap();
 
-        match bloquear(planejar_baixar(&conn, &transporte, false)).unwrap() {
+        match planejar_baixar_teste(&conn, &transporte, false) {
             PlanoBaixar::Aplicar(m) => assert_eq!(m.contador, 4),
             PlanoBaixar::Recusar(r) => panic!("devia liberar aplicar: {}", r.mensagem),
         }
@@ -1929,7 +2024,7 @@ mod tests {
         carimbo_gravar(&conn, 3, "2026-08-10 10:00:00").unwrap();
         conn.execute("INSERT INTO nota (titulo, corpo) VALUES ('t', 'c')", []).unwrap();
 
-        match bloquear(planejar_boot(&conn, &transporte)).unwrap() {
+        match planejar_boot_teste(&conn, &transporte) {
             PlanoBoot::Conflito(m) => assert_eq!(m.contador, 4),
             _ => panic!("nuvem mais nova + local sujo devia conflitar, nunca aplicar sozinho"),
         }
@@ -1939,7 +2034,7 @@ mod tests {
         // nunca tocou um diretório observado.
         let banco_vivo = raiz.join("app_data").join("rpg.db");
         let imagens = raiz.join("app_data").join("images");
-        let r = bloquear(enviar(&conn, &banco_vivo, &imagens, &transporte, true)).unwrap();
+        let r = enviar_teste(&conn, &banco_vivo, &imagens, &transporte, true);
         assert!(r.sucesso);
         let backup = r.backup.expect("forcar por cima do remoto mais novo deve gerar backup");
         assert!(std::path::Path::new(&backup).exists(), "backup remoto devia existir em disco local: {backup}");
@@ -1963,7 +2058,7 @@ mod tests {
         // máquina). Bootstrap da semente deixa o banco "sujo":
         conn.execute("INSERT INTO nota (titulo, corpo) VALUES ('t', 'c')", []).unwrap();
 
-        match bloquear(planejar_boot(&conn, &transporte)).unwrap() {
+        match planejar_boot_teste(&conn, &transporte) {
             PlanoBoot::Aplicar(m) => assert_eq!(m.contador, 1),
             _ => panic!("FIX4: primeira sync (contador 0) devia aplicar mesmo com sujo"),
         }

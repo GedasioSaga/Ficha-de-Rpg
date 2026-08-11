@@ -443,11 +443,11 @@ export const syncBaixar = (forcar: boolean) =>
   invoke<SyncResultado>("sync_baixar", { forcar });
 
 /**
- * O que a sincronização automática do boot fez (Fase 3): lê e zera o evento
- * gravado no `setup()` do Tauri — só volta diferente de `{ tipo: "nenhum" }`
- * uma vez por sessão, no primeiro render depois de abrir o app.
+ * Dispara a sincronização automática do boot (Fase 3) sob demanda — não roda
+ * mais dentro do `.setup()` do Tauri (rede bloqueava a abertura da janela).
+ * Chamado pelo `SyncBootDriver` depois do primeiro render.
  */
-export const syncEventoBoot = () => invoke<EventoBootSync>("sync_evento_boot", {});
+export const syncVerificarBoot = () => invoke<EventoBootSync>("sync_verificar_boot", {});
 
 /**
  * Chave espelhando `CHAVE_SYNC_TRANSPORTE` (Rust, `db::sincronizacao_nuvem`).

@@ -13,7 +13,9 @@ mod semente;
 use db::connection::{open, Db};
 use db::error::AppError;
 use db::repositorios::{CargaBatalha, PresetResumo};
-use db::sincronizacao_nuvem::{self, EventoBootSync, PlanoBaixar, PlanoBoot, SyncResultado, SyncStatus};
+use db::sincronizacao_nuvem::{
+    self, EventoBootSync, PlanoBaixar, PlanoBoot, PlanoEnvio, SyncResultado, SyncStatus,
+};
 use discord::{
     discord_atualizar_mapa, discord_auto_seguir, discord_canal_salvo, discord_conectar,
     discord_definir_canal, discord_entrar_voz, discord_iniciar, discord_ler_canal,
@@ -962,6 +964,15 @@ fn sync_pasta_atual(db: tauri::State<Db>) -> Result<Option<String>, AppError> {
 /// outro lado. Agora monta o transporte configurado (mesmo caminho de
 /// `sync_enviar`/`sync_baixar`) antes de perguntar o status. Sem transporte
 /// configurado ainda (pasta nunca escolhida), o `SemNuvem` de sempre.
+///
+/// Deadlock de I/O de rede sob o Mutex do banco (docs/plans/2026-08-11-sync-google-drive.md,
+/// fix pós-Fase 3): o `Mutex<Connection>` do `Db` gerenciado é a ÚNICA
+/// conexão do app — todo comando tranca esse Mutex, então nenhuma chamada de
+/// rede pode rodar com ele travado (senão o app inteiro trava até a rede
+/// responder). Fase 1 (abaixo) lê tudo que precisa do banco com um lock BREVE
+/// que cai antes do `block_on`; a Fase 2, sem nenhum `db.conn()` vivo, faz a
+/// rede (`montar_transporte_de` + `status`, cujas assinaturas nem recebem
+/// `Connection` — garantia estrutural, não convenção).
 #[tauri::command]
 fn sync_status(
     app: tauri::AppHandle,
@@ -970,38 +981,60 @@ fn sync_status(
     cofre: tauri::State<segredos::CofreState>,
 ) -> Result<SyncStatus, AppError> {
     let staging = diretorio_sync_tmp(&app)?;
-    let conn = db.conn()?;
 
+    // Fase 1 — lock BREVE: só leitura do banco. O guard cai no fim deste
+    // bloco, antes do `block_on` da Fase 2.
+    let (tipo, pasta, carimbo, sujo) = {
+        let conn = db.conn()?;
+        let (tipo, pasta) = ler_config_transporte(&conn)?;
+        let carimbo = sincronizacao_nuvem::carimbo_ler(&conn)?;
+        let sujo = sincronizacao_nuvem::banco_esta_sujo(&conn)?;
+        (tipo, pasta, carimbo, sujo)
+    };
+
+    // Fase 2 — rede, SEM lock nenhum sobre o `Db`.
     tauri::async_runtime::block_on(async {
-        let Some(transporte) = montar_transporte(&conn, &staging, &google, &cofre).await? else {
-            let carimbo = sincronizacao_nuvem::carimbo_ler(&conn)?;
+        let Some(transporte) = montar_transporte_de(tipo, pasta, &staging, &google, &cofre).await? else {
             return Ok(SyncStatus {
                 acao: sincronizacao_nuvem::Acao::SemNuvem,
                 contador_nuvem: None,
                 contador_local: carimbo.contador,
-                sujo: sincronizacao_nuvem::banco_esta_sujo(&conn)?,
+                sujo,
                 hora: carimbo.hora,
             });
         };
-        sincronizacao_nuvem::status(&conn, transporte.as_ref()).await
+        sincronizacao_nuvem::status(&carimbo, sujo, transporte.as_ref()).await
     })
 }
 
-/// Monta o transporte configurado (`config.sync_transporte`, Fase 3) pronto
-/// pra usar. `Ok(None)` = transporte "pasta" mas `sync_pasta` ainda não foi
+/// Lê só a config do transporte (`sync_transporte`/`sync_pasta`) — Fase 1
+/// (lock breve) de todo comando de sync. Nunca faz rede.
+fn ler_config_transporte(
+    conn: &rusqlite::Connection,
+) -> Result<(sincronizacao_nuvem::TipoTransporte, Option<String>), AppError> {
+    let tipo = sincronizacao_nuvem::TipoTransporte::ler(conn)?;
+    let pasta = db::repositorios::config_get(conn, sincronizacao_nuvem::CHAVE_SYNC_PASTA)?;
+    Ok((tipo, pasta))
+}
+
+/// Monta o transporte a partir de config JÁ LIDA por [`ler_config_transporte`]
+/// (Fase 2 — sem `Connection` na assinatura: garantia estrutural de que esta
+/// função, que faz `access_token().await` = rede, nunca pode segurar o Mutex
+/// do `Db`). `Ok(None)` = transporte "pasta" mas `sync_pasta` ainda não foi
 /// escolhida — quem chama decide o que fazer (recusar com mensagem nos
 /// comandos manuais; não fazer nada no boot). Transporte "drive" sem conta
 /// conectada (ou cofre trancado) sobe como `Err` — o usuário vê a mensagem
 /// clara que `google::auth::access_token` já produz.
-async fn montar_transporte(
-    conn: &rusqlite::Connection,
+async fn montar_transporte_de(
+    tipo: sincronizacao_nuvem::TipoTransporte,
+    pasta: Option<String>,
     dir_local: &std::path::Path,
     estado_google: &EstadoGoogle,
     cofre: &segredos::CofreState,
 ) -> Result<Option<Box<dyn sincronizacao_nuvem::Transporte>>, AppError> {
-    match sincronizacao_nuvem::TipoTransporte::ler(conn)? {
+    match tipo {
         sincronizacao_nuvem::TipoTransporte::Pasta => {
-            let Some(pasta) = db::repositorios::config_get(conn, sincronizacao_nuvem::CHAVE_SYNC_PASTA)? else {
+            let Some(pasta) = pasta else {
                 return Ok(None);
             };
             Ok(Some(Box::new(sincronizacao_nuvem::TransportePasta::new(pasta))))
@@ -1041,22 +1074,61 @@ fn sync_enviar(
 ) -> Result<SyncResultado, AppError> {
     let (banco_vivo, imagens_dir) = caminhos_banco(&app)?;
     let staging = diretorio_sync_tmp(&app)?;
-    let conn = db.conn()?;
 
-    tauri::async_runtime::block_on(async {
-        let Some(transporte) = montar_transporte(&conn, &staging, &google, &cofre).await? else {
-            return Ok(sync_resultado_sem_transporte());
+    // Fase 1 — lock BREVE: lê tudo que precisa do banco. `agora` é lido
+    // aqui (antes da rede) porque `enviar` não toca mais o banco — é só o
+    // que vira `carimbo_hora` se der certo, não precisa ser o instante exato
+    // em que a publicação terminou.
+    let (tipo, pasta, carimbo, agora) = {
+        let conn = db.conn()?;
+        let (tipo, pasta) = ler_config_transporte(&conn)?;
+        let carimbo = sincronizacao_nuvem::carimbo_ler(&conn)?;
+        let agora = sincronizacao_nuvem::sqlite_agora(&conn)?;
+        (tipo, pasta, carimbo, agora)
+    };
+
+    // Fase 2 — rede, SEM lock: monta o transporte (pode envolver
+    // `access_token().await`) e publica o pacote. `enviar` não recebe
+    // `Connection` — não grava carimbo nenhum, só devolve o plano.
+    let plano = tauri::async_runtime::block_on(async {
+        let Some(transporte) = montar_transporte_de(tipo, pasta, &staging, &google, &cofre).await? else {
+            return Ok(None);
         };
-        sincronizacao_nuvem::enviar(&conn, &banco_vivo, &imagens_dir, transporte.as_ref(), forcar).await
-    })
+        sincronizacao_nuvem::enviar(&carimbo, &agora, &banco_vivo, &imagens_dir, transporte.as_ref(), forcar)
+            .await
+            .map(Some)
+    })?;
+    let Some(plano) = plano else {
+        return Ok(sync_resultado_sem_transporte());
+    };
+
+    // Fase 3 — lock BREVE: grava o carimbo conforme o plano (rede já
+    // terminou e soltou o Mutex há muito).
+    match plano {
+        PlanoEnvio::Recusado(resultado) => Ok(resultado),
+        PlanoEnvio::Enviado { novo_contador, agora, backup } => {
+            let conn = db.conn()?;
+            sincronizacao_nuvem::finalizar_enviar(&conn, novo_contador, &agora, backup)
+        }
+    }
 }
 
 /// `sync_baixar` substitui o `rpg.db` por baixo da conexão viva — no Windows
 /// o `rename` de `aplicar_pacote` não convive com um handle aberto no
 /// destino, então a conexão do `Db` gerenciado é fechada, o arquivo é
-/// trocado, e uma nova conexão é reaberta antes de devolver. Enquanto isso
-/// dura, o `Mutex<Connection>` fica travado — qualquer outro comando só
-/// espera, não corre risco de ver o banco pela metade.
+/// trocado, e uma nova conexão é reaberta antes de devolver.
+///
+/// Deadlock de I/O de rede sob o Mutex do banco (docs/plans/2026-08-11-sync-google-drive.md,
+/// fix pós-Fase 3): antes o `Mutex<Connection>` ficava travado da Fase 1 até
+/// o fim, incluindo TODA a rede (`planejar_baixar` + o download em si) — um
+/// `sync_baixar` sozinho travava o app inteiro enquanto baixava do Drive.
+/// Agora: Fase 1 (lock breve) só lê config/carimbo/sujo; Fase 2 (SEM lock)
+/// decide via `planejar_baixar` e, se for aplicar, já baixa o pacote inteiro
+/// pra um temp local (`baixar_pacote_para`, rede) — ainda sem tocar o banco
+/// vivo; Fase 3 (lock breve de novo) fecha a conexão, aplica o temp já
+/// baixado (`aplicar_pacote`, só disco local — nenhum `.await` aqui dentro),
+/// reabre e grava o carimbo. O `Mutex` só fica travado durante I/O local
+/// rápido, nunca durante a espera de rede.
 #[tauri::command]
 fn sync_baixar(
     app: tauri::AppHandle,
@@ -1067,102 +1139,181 @@ fn sync_baixar(
 ) -> Result<SyncResultado, AppError> {
     let (banco_destino, imagens_dir) = caminhos_banco(&app)?;
     let staging = diretorio_sync_tmp(&app)?;
+
+    // Fase 1 — lock BREVE: só leitura do banco.
+    let (tipo, pasta, carimbo, sujo) = {
+        let conn = db.conn()?;
+        let (tipo, pasta) = ler_config_transporte(&conn)?;
+        let carimbo = sincronizacao_nuvem::carimbo_ler(&conn)?;
+        let sujo = sincronizacao_nuvem::banco_esta_sujo(&conn)?;
+        (tipo, pasta, carimbo, sujo)
+    };
+
+    // Fase 2 — rede, SEM lock: decide a ação e, se liberar aplicar, já baixa
+    // o `.rpgpack` inteiro pra um temp local — o banco vivo ainda nem foi
+    // tocado.
+    std::fs::create_dir_all(&staging)?;
+    let temp_pacote = staging.join(format!("{}.baixado", sincronizacao_nuvem::NOME_PACOTE));
+    let decisao: Result<Result<sincronizacao_nuvem::Manifesto, SyncResultado>, AppError> =
+        tauri::async_runtime::block_on(async {
+            let Some(transporte) = montar_transporte_de(tipo, pasta, &staging, &google, &cofre).await? else {
+                return Ok(Err(sync_resultado_sem_transporte()));
+            };
+            let manifesto = match sincronizacao_nuvem::planejar_baixar(&carimbo, sujo, transporte.as_ref(), forcar)
+                .await?
+            {
+                PlanoBaixar::Recusar(resultado) => return Ok(Err(resultado)),
+                PlanoBaixar::Aplicar(manifesto) => manifesto,
+            };
+            transporte.baixar_pacote_para(&temp_pacote).await?;
+            Ok(Ok(manifesto))
+        });
+    let decisao = decisao?;
+    let manifesto = match decisao {
+        Err(resultado) => {
+            let _ = std::fs::remove_file(&temp_pacote);
+            return Ok(resultado);
+        }
+        Ok(manifesto) => manifesto,
+    };
+
+    // Fase 3 — lock BREVE: fecha a conexão viva, aplica o pacote JÁ BAIXADO
+    // (puramente local, sem `.await`), reabre e grava o carimbo. Isolado numa
+    // função própria pra `?` não pular a limpeza do temp logo abaixo.
+    let resultado = aplicar_baixar_local(&db, &temp_pacote, &banco_destino, &imagens_dir, &manifesto);
+    let _ = std::fs::remove_file(&temp_pacote);
+    resultado
+}
+
+/// Fase 3 de `sync_baixar` (ver doc lá): fecha/reabre a conexão gerenciada
+/// ao redor de `aplicar_pacote` (troca de arquivo local) e grava o carimbo.
+/// Nenhum `.await` aqui dentro — por isso não é `async` e não precisa de
+/// `block_on`; o Mutex fica travado só pelo tempo de I/O de disco local.
+fn aplicar_baixar_local(
+    db: &Db,
+    temp_pacote: &std::path::Path,
+    banco_destino: &std::path::Path,
+    imagens_dir: &std::path::Path,
+    manifesto: &sincronizacao_nuvem::Manifesto,
+) -> Result<SyncResultado, AppError> {
     let mut guard = db.conn()?;
 
-    tauri::async_runtime::block_on(async {
-        let Some(transporte) = montar_transporte(&guard, &staging, &google, &cofre).await? else {
-            return Ok(sync_resultado_sem_transporte());
-        };
+    // FIX B (revisão adversarial, 2026-08-11): o pacote chega scrubado de
+    // `sync_pasta`/`sync_machine_id`/`sync_transporte` (não só Gemini), então
+    // depois de `materializar_banco` trocar o `rpg.db` inteiro essas chaves
+    // somem do banco aplicado — a identidade DESTA máquina precisa ser lida
+    // ANTES da troca e regravada DEPOIS. Nunca pode virar a identidade da
+    // máquina que enviou o pacote.
+    let identidade_local = sincronizacao_nuvem::identidade_local_preservar(&guard)?;
 
-        let manifesto = match sincronizacao_nuvem::planejar_baixar(&guard, transporte.as_ref(), forcar).await? {
-            PlanoBaixar::Recusar(resultado) => return Ok(resultado),
-            PlanoBaixar::Aplicar(manifesto) => manifesto,
-        };
+    // Troca a conexão viva por uma em memória (placeholder) enquanto o
+    // arquivo em disco é substituído, e fecha a antiga antes do rename.
+    let placeholder = open_in_memory_para_troca()?;
+    let antiga = std::mem::replace(&mut *guard, placeholder);
+    if let Err((_, e)) = antiga.close() {
+        eprintln!("[sync_baixar] falha ao fechar conexão antiga: {e}");
+    }
 
-        // FIX B (revisão adversarial, 2026-08-11): o pacote agora chega
-        // scrubado de `sync_pasta`/`sync_machine_id`/`sync_transporte` (não
-        // só Gemini), então depois de `materializar_banco` trocar o `rpg.db`
-        // inteiro essas chaves somem do banco aplicado — a identidade DESTA
-        // máquina precisa ser lida ANTES da troca e regravada DEPOIS. Nunca
-        // pode virar a identidade da máquina que enviou o pacote.
-        let identidade_local = sincronizacao_nuvem::identidade_local_preservar(&guard)?;
+    let backup = sincronizacao_nuvem::aplicar_pacote(temp_pacote, banco_destino, imagens_dir);
 
-        // Troca a conexão viva por uma em memória (placeholder) enquanto o
-        // arquivo em disco é substituído, e fecha a antiga antes do rename.
-        let placeholder = open_in_memory_para_troca()?;
-        let antiga = std::mem::replace(&mut *guard, placeholder);
-        if let Err((_, e)) = antiga.close() {
-            eprintln!("[sync_baixar] falha ao fechar conexão antiga: {e}");
-        }
+    *guard = open(banco_destino)?;
+    sincronizacao_nuvem::identidade_local_restaurar(&guard, &identidade_local)?;
 
-        let backup =
-            sincronizacao_nuvem::baixar_e_aplicar(transporte.as_ref(), &staging, &banco_destino, &imagens_dir)
-                .await;
-
-        *guard = open(&banco_destino)?;
-        sincronizacao_nuvem::identidade_local_restaurar(&guard, &identidade_local)?;
-
-        let backup = backup?;
-        sincronizacao_nuvem::finalizar_baixar(&guard, &manifesto, backup)
-    })
+    let backup = backup?;
+    sincronizacao_nuvem::finalizar_baixar(&guard, manifesto, backup)
 }
 
 fn open_in_memory_para_troca() -> Result<rusqlite::Connection, AppError> {
     db::connection::open_in_memory()
 }
 
-/// Estado do que aconteceu na sincronização automática do boot (Fase 3): o
-/// `setup()` decide e grava aqui, porque não tem UI pra abrir diálogo nem
-/// disparar toast; a tela lê no primeiro render via `sync_evento_boot`, que
-/// zera o valor (`Nenhum`) ao ler — assim só aparece uma vez por sessão,
-/// mesmo com o `StrictMode` do React montando duas vezes em dev.
-pub(crate) struct SyncBootState(Mutex<EventoBootSync>);
-
+/// Sincronização de boot, sob demanda (Fase 3, docs/plans/2026-08-11-sync-google-drive.md
+/// §4 "Boot (automático)"; movida do `.setup()` pro frontend disparar depois
+/// do render — ver comentário no `setup()`). Mesmo faseamento de
+/// `sync_status`/`sync_enviar`/`sync_baixar`: lock BREVE só pra ler
+/// config/carimbo/sujo, rede sem lock nenhum (monta transporte + decide o
+/// plano + já baixa o pacote se for aplicar), lock BREVE de novo só pra
+/// trocar a conexão e aplicar o que já está em disco local
+/// (`aplicar_baixar_local`, reaproveitado de `sync_baixar` — mesma máquina de
+/// fechar/trocar/reabrir a conexão gerenciada).
+///
+/// Erro de rede/transporte indisponível não vira `Err` pra UI — devolve
+/// `EventoBootSync::Nenhum` e loga, igual o boot antigo dentro do `setup()`
+/// fazia (silencioso: o app não pode travar/mostrar erro só porque a nuvem
+/// está fora do ar).
 #[tauri::command]
-fn sync_evento_boot(estado: tauri::State<SyncBootState>) -> Result<EventoBootSync, AppError> {
-    let mut g = estado.0.lock().map_err(|e| AppError::Msg(e.to_string()))?;
-    Ok(std::mem::replace(&mut *g, EventoBootSync::Nenhum))
-}
+fn sync_verificar_boot(
+    app: tauri::AppHandle,
+    db: tauri::State<Db>,
+    google: tauri::State<EstadoGoogle>,
+    cofre: tauri::State<segredos::CofreState>,
+) -> Result<EventoBootSync, AppError> {
+    let (banco_destino, imagens_dir) = caminhos_banco(&app)?;
+    let staging = diretorio_sync_tmp(&app)?;
 
-/// Aplica automaticamente o pacote da nuvem no boot (`PlanoBoot::Aplicar` —
-/// nuvem mais nova + local limpo). Fecha a conexão viva antes do rename do
-/// arquivo (mesma razão de `sync_baixar`: Windows não deixa substituir um
-/// arquivo com handle aberto no destino), reabre depois e grava o carimbo. Se
-/// `aplicar_pacote` falhar, a conexão ainda é reaberta antes do erro subir —
-/// o `setup()` não pode seguir com `conn` inutilizável. `async` porque quem
-/// chama roda isto no seu próprio `block_on` de nível superior — nunca
-/// aninhado dentro de outro (o `tokio::time::timeout` do boot-sync, em
-/// `setup()`, some antes desta função ser chamada, exatamente pra não
-/// cancelar a troca de conexão no meio; ver comentário lá).
-async fn aplicar_boot_sync(
-    dir: &std::path::Path,
-    conn: &mut rusqlite::Connection,
-    manifesto: &sincronizacao_nuvem::Manifesto,
-    transporte: &dyn sincronizacao_nuvem::Transporte,
-) -> Result<(), AppError> {
-    let banco_destino = dir.join("rpg.db");
-    let imagens_dir = dir.join("images");
-    let staging = dir.join("sync_tmp");
+    // Fase 1 — lock BREVE: só leitura do banco.
+    let (tipo, pasta, carimbo, sujo) = {
+        let conn = db.conn()?;
+        let (tipo, pasta) = ler_config_transporte(&conn)?;
+        let carimbo = sincronizacao_nuvem::carimbo_ler(&conn)?;
+        let sujo = sincronizacao_nuvem::banco_esta_sujo(&conn)?;
+        (tipo, pasta, carimbo, sujo)
+    };
 
-    // FIX B (revisão adversarial, 2026-08-11): mesma preservação de
-    // `sync_baixar` — o pacote scrubado não carrega mais `sync_pasta`/
-    // `sync_machine_id`/`sync_transporte`, então sem isto o boot-sync
-    // apagaria a identidade desta máquina a cada aplicação automática.
-    let identidade_local = sincronizacao_nuvem::identidade_local_preservar(conn)?;
+    // Fase 2 — rede, SEM lock: acha transporte, decide o plano e, se for
+    // `Aplicar`, já baixa o `.rpgpack` pra um temp local — o banco vivo ainda
+    // nem foi tocado. `Conflito` não baixa nada: só devolve o contador pra UI
+    // decidir. Qualquer erro aqui (transporte indisponível, rede fora) vira
+    // `None` — nunca derruba o app.
+    std::fs::create_dir_all(&staging)?;
+    let temp_pacote = staging.join(format!("{}.baixado", sincronizacao_nuvem::NOME_PACOTE));
+    let resultado_fase2: Result<Option<Result<sincronizacao_nuvem::Manifesto, i64>>, AppError> =
+        tauri::async_runtime::block_on(async {
+            let Some(transporte) = montar_transporte_de(tipo, pasta, &staging, &google, &cofre).await? else {
+                return Ok(None);
+            };
+            match sincronizacao_nuvem::planejar_boot(&carimbo, sujo, transporte.as_ref()).await? {
+                PlanoBoot::Nenhum => Ok(None),
+                PlanoBoot::Conflito(m) => Ok(Some(Err(m.contador))),
+                PlanoBoot::Aplicar(manifesto) => {
+                    transporte.baixar_pacote_para(&temp_pacote).await?;
+                    Ok(Some(Ok(manifesto)))
+                }
+            }
+        });
+    let plano = match resultado_fase2 {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[sync boot] verificação falhou: {e}");
+            None
+        }
+    };
 
-    let placeholder = open_in_memory_para_troca()?;
-    let antiga = std::mem::replace(conn, placeholder);
-    if let Err((_, e)) = antiga.close() {
-        eprintln!("[sync boot] falha ao fechar conexão antiga: {e}");
+    let manifesto = match plano {
+        None => return Ok(EventoBootSync::Nenhum),
+        Some(Err(contador_nuvem)) => {
+            eprintln!(
+                "[sync boot] conflito: nuvem v{contador_nuvem} vs. local com mudanças não enviadas — aguardando decisão na UI"
+            );
+            return Ok(EventoBootSync::ConflitoPendente { contador_nuvem });
+        }
+        Some(Ok(manifesto)) => manifesto,
+    };
+
+    // Fase 3 — lock BREVE: fecha a conexão viva, aplica o pacote JÁ BAIXADO
+    // (puramente local, sem `.await`), reabre e grava o carimbo.
+    let resultado = aplicar_baixar_local(&db, &temp_pacote, &banco_destino, &imagens_dir, &manifesto);
+    let _ = std::fs::remove_file(&temp_pacote);
+    match resultado {
+        Ok(_) => {
+            eprintln!("[sync boot] nuvem v{} aplicada automaticamente (local limpo)", manifesto.contador);
+            Ok(EventoBootSync::AplicadoAutomaticamente { contador: manifesto.contador })
+        }
+        Err(e) => {
+            eprintln!("[sync boot] falha ao aplicar automaticamente: {e}");
+            Ok(EventoBootSync::Nenhum)
+        }
     }
-
-    let resultado_backup =
-        sincronizacao_nuvem::baixar_e_aplicar(transporte, &staging, &banco_destino, &imagens_dir).await;
-    *conn = open(&banco_destino)?;
-    sincronizacao_nuvem::identidade_local_restaurar(conn, &identidade_local)?;
-    let backup = resultado_backup?;
-    sincronizacao_nuvem::finalizar_baixar(conn, manifesto, backup)?;
-    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1202,7 +1353,7 @@ pub fn run() {
                 Err(e) => eprintln!("[semente] ignorada: {e}"),
             }
 
-            let mut conn = open(&banco_destino).expect("abrir/migrar SQLite");
+            let conn = open(&banco_destino).expect("abrir/migrar SQLite");
 
             // Cofre de segredos: cache local (senha já digitada nesta máquina) ou
             // re-import silencioso de blob rotacionado. `None` = a UI vai pedir a
@@ -1219,107 +1370,15 @@ pub fn run() {
                 segredos::injetar_gemini_se_ausente(&conn, s);
             }
 
-            // Sincronização de nuvem — boot automático (Fase 3,
-            // docs/plans/2026-08-11-sync-google-drive.md, sobre
-            // docs/plans/2026-08-10-sync-nuvem.md §4 "Boot (automático)").
-            // Roda ANTES de qualquer leitura/seed abaixo (favoritos, canal do
-            // Discord, batalha ativa) porque pode trocar o banco inteiro por
-            // baixo: `NuvemMaisNova` + local limpo aplica sozinho (com
-            // backup); `Conflito` (nuvem mais nova + local sujo) NUNCA aplica
-            // aqui — só guarda o evento pra tela abrir o diálogo. Falha aqui
-            // não derruba o app, só loga e segue com o banco como estava.
-            //
-            // `EstadoGoogle`/`CofreState` locais (não os gerenciados — esses só
-            // existem depois do `app.manage()` no fim do `setup()`): o boot
-            // precisa de um transporte ANTES de existir estado gerenciado pra
-            // ler. Um `EstadoGoogle::default()` aqui só custa reautenticar pelo
-            // keyring uma vez a mais; nenhuma perda de dado.
-            let estado_google_boot = EstadoGoogle::default();
-            let cofre_state_boot = segredos::CofreState::novo(cofre.clone());
-            let staging_boot = dir.join("sync_tmp");
-            // FIX A (revisão adversarial, 2026-08-11): o timeout do `Client`
-            // (drive.rs/auth.rs) já limita CADA chamada de rede, mas isso não
-            // basta sozinho aqui — o `.setup()` do Tauri não abre janela
-            // nenhuma até devolver, então qualquer travamento (firewall/
-            // captive portal que dropa pacote sem RST, em vez de recusar a
-            // conexão) prendia o app pra sempre na tela de splash. Um teto de
-            // tempo PRÓPRIO, independente do HTTP, garante que o `.setup()`
-            // sempre devolve.
-            //
-            // O timeout envolve só a DECISÃO (achar transporte + perguntar
-            // pro lado remoto o que fazer) — de propósito NÃO envolve
-            // `aplicar_boot_sync` mais abaixo: aquela função troca a conexão
-            // viva por uma em memória, fecha a antiga e só reabre depois do
-            // rename do arquivo; se um `timeout` cancelasse esse futuro no
-            // meio, `conn` ficaria presa num banco em memória vazio pro resto
-            // da sessão. `aplicar_boot_sync` já herda um teto (mais frouxo,
-            // mas finito) de cada chamada de rede via o `Client` do FIX A.
-            const TIMEOUT_BOOT_SYNC: std::time::Duration = std::time::Duration::from_secs(30);
-            let decisao_boot_sync = tauri::async_runtime::block_on(async {
-                let decidir = async {
-                    let transporte = match montar_transporte(
-                        &conn,
-                        &staging_boot,
-                        &estado_google_boot,
-                        &cofre_state_boot,
-                    )
-                    .await
-                    {
-                        Ok(Some(t)) => t,
-                        Ok(None) => return None,
-                        Err(e) => {
-                            eprintln!("[sync boot] transporte indisponível: {e}");
-                            return None;
-                        }
-                    };
-                    match sincronizacao_nuvem::planejar_boot(&conn, transporte.as_ref()).await {
-                        Ok(plano) => Some((transporte, plano)),
-                        Err(e) => {
-                            eprintln!("[sync boot] ignorado: {e}");
-                            None
-                        }
-                    }
-                };
-                match tokio::time::timeout(TIMEOUT_BOOT_SYNC, decidir).await {
-                    Ok(decisao) => decisao,
-                    Err(_) => {
-                        eprintln!("[boot-sync] Drive indisponível, seguindo sem sync");
-                        None
-                    }
-                }
-            });
-
-            let evento_boot_sync = match decisao_boot_sync {
-                None => EventoBootSync::Nenhum,
-                Some((_, PlanoBoot::Nenhum)) => EventoBootSync::Nenhum,
-                Some((_, PlanoBoot::Conflito(m))) => {
-                    eprintln!(
-                        "[sync boot] conflito: nuvem v{} vs. local com mudanças não enviadas — aguardando decisão na UI",
-                        m.contador
-                    );
-                    EventoBootSync::ConflitoPendente { contador_nuvem: m.contador }
-                }
-                Some((transporte, PlanoBoot::Aplicar(manifesto))) => {
-                    match tauri::async_runtime::block_on(aplicar_boot_sync(
-                        &dir,
-                        &mut conn,
-                        &manifesto,
-                        transporte.as_ref(),
-                    )) {
-                        Ok(()) => {
-                            eprintln!(
-                                "[sync boot] nuvem v{} aplicada automaticamente (local limpo)",
-                                manifesto.contador
-                            );
-                            EventoBootSync::AplicadoAutomaticamente { contador: manifesto.contador }
-                        }
-                        Err(e) => {
-                            eprintln!("[sync boot] falha ao aplicar automaticamente: {e}");
-                            EventoBootSync::Nenhum
-                        }
-                    }
-                }
-            };
+            // Sincronização de nuvem — o boot automático (Fase 3,
+            // docs/plans/2026-08-11-sync-google-drive.md §4 "Boot
+            // (automático)") NÃO roda mais aqui. `.setup()` não abre janela
+            // nenhuma até devolver, e a sincronização é rede (baixar
+            // manifesto/pacote do Drive) — um travamento de rede (firewall/
+            // captive portal) prendia o app pra sempre na tela de splash. A
+            // sincronização agora roda sob demanda, via comando
+            // `sync_verificar_boot`, chamado pelo frontend depois do render
+            // (`SyncBootDriver`), usando os estados gerenciados abaixo.
 
             // Seed único dos favoritos a partir do config do v1 (só quando a tabela
             // está vazia). Robusto: arquivo ausente ou JSON inválido pula sem erro.
@@ -1387,7 +1446,6 @@ pub fn run() {
             app.manage(EstadoBatalha(Mutex::new(batalha)));
             app.manage(SidecarState::com_canal(canal_salvo));
             app.manage(segredos::CofreState::novo(cofre));
-            app.manage(SyncBootState(Mutex::new(evento_boot_sync)));
             app.manage(EstadoGoogle::default());
             Ok(())
         })
@@ -1490,7 +1548,7 @@ pub fn run() {
             sync_status,
             sync_enviar,
             sync_baixar,
-            sync_evento_boot,
+            sync_verificar_boot,
             segredos::segredos_status,
             segredos::segredos_destravar,
             google_login,

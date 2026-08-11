@@ -1,15 +1,19 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { syncBaixar, syncEventoBoot } from "../../lib/api";
+import { syncBaixar, syncVerificarBoot } from "../../lib/api";
 import { useToast } from "../../components/Toast";
 
 /**
  * Fica fora do `Outlet` (montado no `AppShell`), igual `CofreSenhaDialog` —
- * o evento do boot vale pro app inteiro, não pra uma rota. Lê
- * `sync_evento_boot` uma vez no mount: se o boot já aplicou a nuvem sozinho
- * (nuvem mais nova + local limpo), só avisa com um toast; se achou conflito
+ * o evento do boot vale pro app inteiro, não pra uma rota. Dispara
+ * `sync_verificar_boot` uma vez no mount: a sincronização de boot não roda
+ * mais dentro do `.setup()` do Tauri (rede bloqueava a abertura da janela —
+ * ver docs/plans/2026-08-11-sync-google-drive.md), então é este `useEffect`
+ * que a dispara, em background, sem travar o render. Se a nuvem já aplicou
+ * sozinha (nuvem mais nova + local limpo), só avisa com um toast e invalida
+ * as queries pra UI recarregar com os dados sincronizados; se achou conflito
  * (nuvem mais nova + mudanças locais não enviadas), abre este diálogo — o
- * `setup()` do Tauri não tem UI pra decidir isso sozinho (Fase 3, ver
+ * comando não tem UI pra decidir isso sozinho (Fase 3, ver
  * docs/plans/2026-08-10-sync-nuvem.md).
  */
 export default function SyncBootDriver() {
@@ -20,11 +24,12 @@ export default function SyncBootDriver() {
 
   useEffect(() => {
     let cancelado = false;
-    syncEventoBoot()
+    syncVerificarBoot()
       .then((evento) => {
         if (cancelado) return;
         if (evento.tipo === "aplicado_automaticamente") {
           toast.sucesso(`Sincronizado com a nuvem ao abrir (v${evento.contador}).`);
+          qc.invalidateQueries();
         } else if (evento.tipo === "conflito_pendente") {
           setConflito({ contadorNuvem: evento.contador_nuvem });
         }
