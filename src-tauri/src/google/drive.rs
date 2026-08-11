@@ -45,9 +45,6 @@ pub struct ArquivoRemoto {
 #[serde(rename_all = "camelCase")]
 struct ArquivoDrive {
     id: String,
-    #[serde(default)]
-    name: String,
-    mime_type: Option<String>,
     size: Option<String>,
     modified_time: Option<String>,
     #[serde(default)]
