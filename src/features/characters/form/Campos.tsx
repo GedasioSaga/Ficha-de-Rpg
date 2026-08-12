@@ -158,6 +158,69 @@ export function SelectAtributo({
   );
 }
 
+/** Separador do CSV de slugs de atributo (contrato `PericiaDto.atributo`). */
+const SEPARADOR_ATRIBUTOS = ",";
+
+/**
+ * Caixas de seleção dos 8 atributos — perícia pode exigir mais de um. Valor
+ * entra e sai como a string CSV do contrato (ex.: "percepcao,intuicao").
+ */
+export function MultiAtributo({
+  label,
+  valor,
+  onChange,
+}: {
+  label?: string;
+  valor: string;
+  onChange: (v: string) => void;
+}) {
+  const tokens = valor
+    .split(SEPARADOR_ATRIBUTOS)
+    .map((a) => a.trim())
+    .filter(Boolean);
+  const selecionados = new Set(tokens);
+
+  // Ficha importada da versão antiga pode trazer texto livre (ex.: "(Percepção/
+  // Intuição)") em vez do CSV de slugs. Nenhuma caixa bate, e se o usuário marcar
+  // qualquer uma e salvar, esse texto é descartado sem aviso — sinaliza antes disso.
+  const legado = tokens.filter((t) => !(ATRIBUTOS as readonly string[]).includes(t));
+
+  function alternar(atributo: string, marcado: boolean) {
+    const proximos = new Set(selecionados);
+    if (marcado) proximos.add(atributo);
+    else proximos.delete(atributo);
+    onChange(ATRIBUTOS.filter((a) => proximos.has(a)).join(SEPARADOR_ATRIBUTOS));
+  }
+
+  return (
+    <fieldset>
+      {label && <legend className="mb-1 block text-xs font-medium text-slate-400">{label}</legend>}
+      {legado.length > 0 && (
+        <p className="mb-1.5 text-xs text-amber-400">
+          Valor não reconhecido nesta ficha ({legado.join(", ")}) — será perdido se você marcar e
+          salvar.
+        </p>
+      )}
+      <div className="grid grid-cols-2 gap-1.5">
+        {ATRIBUTOS.map((a) => (
+          <label
+            key={a}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900 px-2 py-1.5 text-sm text-slate-200"
+          >
+            <input
+              type="checkbox"
+              checked={selecionados.has(a)}
+              onChange={(e) => alternar(a, e.target.checked)}
+              className="size-3.5 accent-indigo-500"
+            />
+            {ROTULO_ATRIBUTO[a]}
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
 function Caret() {
   return (
     <svg

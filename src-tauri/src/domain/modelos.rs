@@ -14,6 +14,12 @@ pub struct PersonagemResumo {
     pub espirito: i64,
     pub carisma: i64,
     pub determinacao: i64,
+    /// "" quando não definida (ex.: NPC tipo "Barril"). Sem raça a IA de
+    /// balanceamento não sabe aplicar modificadores raciais (Ogro reduz 30%
+    /// do dano recebido, Lunariano alterna forma, Mink tem Sulong...).
+    pub raca: String,
+    /// "" quando não definido.
+    pub oficio: String,
     /// Nomes das etiquetas do personagem (só NPCs têm). Alimenta o filtro da
     /// galeria e o agrupamento da lista de Disponíveis na Batalha.
     pub etiquetas: Vec<String>,
@@ -63,8 +69,9 @@ pub struct HabilidadeDto {
 pub struct PericiaDto {
     pub nome: String,
     pub descricao: String,
+    /// Slugs canônicos separados por vírgula ("percepcao,intuicao") — ver
+    /// `domain::pericias::parse_atributos`. Perícia pode ter mais de um.
     pub atributo: String,
-    pub nivel: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +112,9 @@ pub struct PersonagemCompleto {
     pub vantagens: Vec<TracoDto>,
     pub desvantagens: Vec<TracoDto>,
     pub transformacoes: Vec<TransformacaoDto>,
+    /// "" quando não definida/o. Ver `PersonagemResumo::raca`.
+    pub raca: String,
+    pub oficio: String,
     /// Nomes das etiquetas (só NPCs); o form recarrega daqui ao editar.
     pub etiquetas: Vec<String>,
 }
@@ -144,7 +154,6 @@ pub struct PericiaInput {
     pub nome: String,
     pub descricao: String,
     pub atributo: String,
-    pub nivel: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -185,6 +194,11 @@ pub struct PersonagemInput {
     pub espirito: i64,
     pub carisma: i64,
     pub determinacao: i64,
+    /// "" quando não definida/o (ex.: NPC tipo "Barril"). Sem `serde(default)`
+    /// de propósito, igual ao resto deste struct: o payload vem do frontend,
+    /// que sempre manda o campo (ver contrato de tipos combinado).
+    pub raca: String,
+    pub oficio: String,
     pub retrato: RetratoInput,
     pub habilidades: Vec<HabilidadeInput>,
     pub pericias: Vec<PericiaInput>,
@@ -319,6 +333,10 @@ pub struct FichaExportada {
     pub carisma: i64,
     #[serde(default)]
     pub determinacao: i64,
+    #[serde(default)]
+    pub raca: String,
+    #[serde(default)]
+    pub oficio: String,
     #[serde(default)]
     pub retrato: Option<RetratoExportado>,
     #[serde(default)]

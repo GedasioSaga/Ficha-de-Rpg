@@ -41,6 +41,8 @@ pub struct NovoPersonagem {
     pub espirito: i64,
     pub carisma: i64,
     pub determinacao: i64,
+    pub raca: String,
+    pub oficio: String,
     pub retrato_id: Option<i64>,
 }
 
@@ -48,12 +50,13 @@ pub fn inserir_personagem(conn: &Connection, p: &NovoPersonagem) -> Result<i64, 
     conn.execute(
         "INSERT INTO personagem
          (tipo,nome,descricao,hp,sp,escudo,forca,agilidade,percepcao,resistencia,
-          intuicao,espirito,carisma,determinacao,retrato_id)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+          intuicao,espirito,carisma,determinacao,raca,oficio,retrato_id)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
         params![
             p.tipo, p.nome, p.descricao, p.hp, p.sp, p.escudo,
             p.forca, p.agilidade, p.percepcao, p.resistencia,
-            p.intuicao, p.espirito, p.carisma, p.determinacao, p.retrato_id
+            p.intuicao, p.espirito, p.carisma, p.determinacao,
+            p.raca, p.oficio, p.retrato_id
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -73,6 +76,8 @@ fn linha_para_resumo(row: &Row) -> rusqlite::Result<PersonagemResumo> {
         espirito: row.get(9)?,
         carisma: row.get(10)?,
         determinacao: row.get(11)?,
+        raca: row.get(12)?,
+        oficio: row.get(13)?,
         etiquetas: Vec::new(), // preenchido depois, em lote (ver listar_personagens)
     })
 }
@@ -82,7 +87,8 @@ pub fn listar_personagens(
     tipo: Option<&str>,
 ) -> Result<Vec<PersonagemResumo>, AppError> {
     let base = "SELECT p.id,p.tipo,p.nome,i.caminho,p.forca,p.agilidade,p.percepcao,\
-                p.resistencia,p.intuicao,p.espirito,p.carisma,p.determinacao \
+                p.resistencia,p.intuicao,p.espirito,p.carisma,p.determinacao,\
+                p.raca,p.oficio \
                 FROM personagem p LEFT JOIN imagem i ON i.id = p.retrato_id";
     let mut out = match tipo {
         Some(t) => {
@@ -156,6 +162,8 @@ struct LinhaBase {
     sp: i64,
     escudo: i64,
     valores: [i64; 8],
+    raca: String,
+    oficio: String,
     retrato: Option<String>,
 }
 
@@ -166,7 +174,7 @@ pub fn get_personagem(conn: &Connection, id: i64) -> Result<PersonagemCompleto, 
         .query_row(
             "SELECT p.tipo,p.nome,p.descricao,p.hp,p.sp,p.escudo,\
              p.forca,p.agilidade,p.percepcao,p.resistencia,p.intuicao,p.espirito,p.carisma,p.determinacao,\
-             i.caminho \
+             p.raca,p.oficio,i.caminho \
              FROM personagem p LEFT JOIN imagem i ON i.id = p.retrato_id \
              WHERE p.id = ?1",
             [id],
@@ -182,7 +190,9 @@ pub fn get_personagem(conn: &Connection, id: i64) -> Result<PersonagemCompleto, 
                         r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?,
                         r.get(10)?, r.get(11)?, r.get(12)?, r.get(13)?,
                     ],
-                    retrato: r.get(14)?,
+                    raca: r.get(14)?,
+                    oficio: r.get(15)?,
+                    retrato: r.get(16)?,
                 })
             },
         )
@@ -214,6 +224,8 @@ pub fn get_personagem(conn: &Connection, id: i64) -> Result<PersonagemCompleto, 
         vantagens: carregar_tracos(conn, id, "personagem_vantagem")?,
         desvantagens: carregar_tracos(conn, id, "personagem_desvantagem")?,
         transformacoes: carregar_transformacoes(conn, id)?,
+        raca: base.raca,
+        oficio: base.oficio,
         etiquetas: etiquetas_do_personagem(conn, id)?,
     })
 }
@@ -271,7 +283,7 @@ fn carregar_habilidades(
 
 fn carregar_pericias(conn: &Connection, personagem_id: i64) -> Result<Vec<PericiaDto>, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT nome,descricao,atributo,nivel FROM personagem_pericia \
+        "SELECT nome,descricao,atributo FROM personagem_pericia \
          WHERE personagem_id=?1 ORDER BY id",
     )?;
     let out = stmt
@@ -280,7 +292,6 @@ fn carregar_pericias(conn: &Connection, personagem_id: i64) -> Result<Vec<Perici
                 nome: r.get(0)?,
                 descricao: r.get(1)?,
                 atributo: r.get(2)?,
-                nivel: r.get(3)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -420,6 +431,8 @@ pub fn criar_personagem(
         espirito: input.espirito,
         carisma: input.carisma,
         determinacao: input.determinacao,
+        raca: input.raca.clone(),
+        oficio: input.oficio.clone(),
         retrato_id,
     };
     let pid = inserir_personagem(conn, &np)?;
@@ -442,11 +455,13 @@ pub fn atualizar_personagem(
          tipo=?1,nome=?2,descricao=?3,hp=?4,sp=?5,escudo=?6,\
          forca=?7,agilidade=?8,percepcao=?9,resistencia=?10,\
          intuicao=?11,espirito=?12,carisma=?13,determinacao=?14,\
-         retrato_id=?15,atualizado_em=datetime('now') WHERE id=?16",
+         raca=?15,oficio=?16,\
+         retrato_id=?17,atualizado_em=datetime('now') WHERE id=?18",
         params![
             input.tipo, input.nome, input.descricao, input.hp, input.sp, input.escudo,
             input.forca, input.agilidade, input.percepcao, input.resistencia,
             input.intuicao, input.espirito, input.carisma, input.determinacao,
+            input.raca, input.oficio,
             retrato_id, id
         ],
     )?;
@@ -498,9 +513,9 @@ fn escrever_colecoes(
     }
     for p in &input.pericias {
         conn.execute(
-            "INSERT INTO personagem_pericia (personagem_id,nome,descricao,atributo,nivel) \
-             VALUES (?1,?2,?3,?4,?5)",
-            params![pid, p.nome, p.descricao, p.atributo, p.nivel],
+            "INSERT INTO personagem_pericia (personagem_id,nome,descricao,atributo) \
+             VALUES (?1,?2,?3,?4)",
+            params![pid, p.nome, p.descricao, p.atributo],
         )?;
     }
     for (lista, tabela) in [
@@ -1437,6 +1452,8 @@ mod tests {
             hp: 100, sp: 10, escudo: 5,
             forca: 9, agilidade: 8, percepcao: 5, resistencia: 7,
             intuicao: 4, espirito: 6, carisma: 9, determinacao: 10,
+            raca: "Humano".into(),
+            oficio: "Cozinheiro".into(),
             retrato: RetratoInput::Nenhum,
             habilidades: vec![],
             pericias: vec![],
@@ -1547,7 +1564,6 @@ mod tests {
             nome: "Luta".into(),
             descricao: String::new(),
             atributo: "forca".into(),
-            nivel: 3,
         }];
         input.vantagens = vec![TracoInput {
             nome: "Sortudo".into(),
@@ -1604,6 +1620,9 @@ mod tests {
             vec![CampoExtra { nome: "Requisito".into(), valor: "Haki desperto".into() }]
         );
         assert!(ficha.retrato.is_some());
+        // raça/ofício fazem ida e volta (criar_personagem -> get_personagem).
+        assert_eq!(ficha.raca, "Humano");
+        assert_eq!(ficha.oficio, "Cozinheiro");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1620,6 +1639,8 @@ mod tests {
             hp: 100, sp: 10, escudo: 5,
             forca: 9, agilidade: 8, percepcao: 5, resistencia: 7,
             intuicao: 4, espirito: 6, carisma: 9, determinacao: 10,
+            raca: String::new(),
+            oficio: String::new(),
             retrato_id: None,
         };
         let id = inserir_personagem(&conn, &p).unwrap();
@@ -1680,8 +1701,8 @@ mod tests {
         novo.nome = "Luffy G5".into();
         novo.habilidades = vec![]; // 0 habilidades
         novo.pericias = vec![
-            PericiaInput { nome: "P1".into(), descricao: String::new(), atributo: "forca".into(), nivel: 1 },
-            PericiaInput { nome: "P2".into(), descricao: String::new(), atributo: "agilidade".into(), nivel: 2 },
+            PericiaInput { nome: "P1".into(), descricao: String::new(), atributo: "forca".into() },
+            PericiaInput { nome: "P2".into(), descricao: String::new(), atributo: "agilidade".into() },
         ];
         atualizar_personagem(&conn, &dir, id, &novo).unwrap();
 
@@ -1794,6 +1815,12 @@ mod tests {
     #[test]
     fn listar_catalogos_conta_certo() {
         let conn = open_in_memory().unwrap();
+        // A migration 0013 completa o Compêndio com seed (12 perícias, 17 vantagens,
+        // 29 desvantagens), então a base já não é zero — a asserção soma a partir dela.
+        let base = listar_catalogos(&conn).unwrap();
+        let (base_pericias, base_vantagens, base_desvantagens) =
+            (base.pericias.len(), base.vantagens.len(), base.desvantagens.len());
+
         conn.execute(
             "INSERT INTO catalogo_pericia (nome,descricao,atributo) VALUES ('Furtividade','d','agilidade')",
             [],
@@ -1816,9 +1843,9 @@ mod tests {
         .unwrap();
 
         let cat = listar_catalogos(&conn).unwrap();
-        assert_eq!(cat.pericias.len(), 1);
-        assert_eq!(cat.vantagens.len(), 1);
-        assert_eq!(cat.desvantagens.len(), 2);
+        assert_eq!(cat.pericias.len(), base_pericias + 1);
+        assert_eq!(cat.vantagens.len(), base_vantagens + 1);
+        assert_eq!(cat.desvantagens.len(), base_desvantagens + 2);
     }
 
     #[test]
@@ -1831,6 +1858,8 @@ mod tests {
             hp: 120, sp: 8, escudo: 0,
             forca: 9, agilidade: 7, percepcao: 6, resistencia: 8,
             intuicao: 5, espirito: 6, carisma: 4, determinacao: 10,
+            raca: "Skypean".into(),
+            oficio: "Navegador".into(),
             retrato_id: None,
         };
         let id = inserir_personagem(&conn, &p).unwrap();
@@ -1839,6 +1868,8 @@ mod tests {
         assert_eq!(lista.len(), 1);
         assert_eq!(lista[0].nome, "Zoro");
         assert_eq!(lista[0].forca, 9);
+        assert_eq!(lista[0].raca, "Skypean");
+        assert_eq!(lista[0].oficio, "Navegador");
         assert_eq!(listar_personagens(&conn, Some("npc")).unwrap().len(), 0);
     }
 
@@ -1852,6 +1883,8 @@ mod tests {
             hp: 100, sp: 10, escudo: 5,
             forca: 9, agilidade: 8, percepcao: 5, resistencia: 7,
             intuicao: 4, espirito: 6, carisma: 9, determinacao: 10,
+            raca: "Ogro".into(),
+            oficio: "".into(),
             retrato_id: None,
         };
         let id = inserir_personagem(&conn, &p).unwrap();
@@ -1861,8 +1894,8 @@ mod tests {
             [id],
         ).unwrap();
         conn.execute(
-            "INSERT INTO personagem_pericia (personagem_id,nome,descricao,atributo,nivel) \
-             VALUES (?1,'Luta','','forca',3)",
+            "INSERT INTO personagem_pericia (personagem_id,nome,descricao,atributo) \
+             VALUES (?1,'Luta','','forca')",
             [id],
         ).unwrap();
         conn.execute(
@@ -1895,7 +1928,8 @@ mod tests {
         );
         assert_eq!(ficha.habilidades.len(), 1);
         assert_eq!(ficha.pericias.len(), 1);
-        assert_eq!(ficha.pericias[0].nivel, 3);
+        assert_eq!(ficha.raca, "Ogro");
+        assert_eq!(ficha.oficio, "");
         assert_eq!(ficha.vantagens.len(), 1);
         assert_eq!(ficha.desvantagens.len(), 0);
         assert_eq!(ficha.transformacoes.len(), 1);
@@ -2028,9 +2062,12 @@ mod tests_catalogo {
     #[test]
     fn pericia_cria_lista_atualiza_e_exclui() {
         let conn = open_in_memory().unwrap();
+        // Base não é zero: migration 0013 seeda o Compêndio com 12 perícias.
+        let base = listar_catalogos(&conn).unwrap().pericias.len();
+
         let p = catalogo_pericia_criar(&conn, &pericia("Furtividade", "agilidade")).unwrap();
         assert!(p.id > 0);
-        assert_eq!(listar_catalogos(&conn).unwrap().pericias.len(), 1);
+        assert_eq!(listar_catalogos(&conn).unwrap().pericias.len(), base + 1);
 
         let atualizada =
             catalogo_pericia_atualizar(&conn, p.id, &pericia("Furtividade+", "percepcao")).unwrap();
@@ -2038,7 +2075,7 @@ mod tests_catalogo {
         assert_eq!(atualizada.atributo, "percepcao");
 
         catalogo_pericia_excluir(&conn, p.id).unwrap();
-        assert_eq!(listar_catalogos(&conn).unwrap().pericias.len(), 0);
+        assert_eq!(listar_catalogos(&conn).unwrap().pericias.len(), base);
     }
 
     #[test]

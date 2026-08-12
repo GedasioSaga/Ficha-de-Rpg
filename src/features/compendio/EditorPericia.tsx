@@ -1,5 +1,5 @@
 import type { CatalogoPericiaInput } from "../../lib/types";
-import { ATRIBUTOS, ROTULO_ATRIBUTO } from "../characters/atributos";
+import { MultiAtributo } from "../characters/form/Campos";
 
 export default function EditorPericia({
   input,
@@ -36,20 +36,11 @@ export default function EditorPericia({
         placeholder="Nome da perícia"
         className="w-full bg-transparent text-lg font-semibold text-slate-100 outline-none placeholder:text-slate-600"
       />
-      <label className="block text-sm">
-        <span className="mb-1 block text-xs font-medium text-slate-400">Atributo</span>
-        <select
-          value={input.atributo}
-          onChange={(e) => onEditar({ atributo: e.target.value })}
-          className="h-10 w-full rounded-lg border border-slate-800 bg-slate-950/50 px-3 text-sm text-slate-100 outline-none focus:border-indigo-500/50"
-        >
-          {ATRIBUTOS.map((a) => (
-            <option key={a} value={a} className="bg-slate-900 text-slate-100">
-              {ROTULO_ATRIBUTO[a]}
-            </option>
-          ))}
-        </select>
-      </label>
+      <MultiAtributo
+        label="Atributos"
+        valor={input.atributo}
+        onChange={(atributo) => onEditar({ atributo })}
+      />
       <textarea
         value={input.descricao}
         onChange={(e) => onEditar({ descricao: e.target.value })}

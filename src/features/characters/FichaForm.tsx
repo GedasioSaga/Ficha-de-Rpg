@@ -372,6 +372,8 @@ function inputVazio(): PersonagemInput {
     desvantagens: [],
     transformacoes: [],
     etiquetas: [],
+    raca: "",
+    oficio: "",
   };
 }
 
@@ -410,6 +412,8 @@ function paraInput(p: PersonagemCompleto): PersonagemInput {
       uid: novaChave(),
     })),
     etiquetas: [...p.etiquetas],
+    raca: p.raca,
+    oficio: p.oficio,
   };
 }
 

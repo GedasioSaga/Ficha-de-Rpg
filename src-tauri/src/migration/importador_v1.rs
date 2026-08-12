@@ -49,6 +49,10 @@ fn importar_registro(
         espirito: i(reg, "espirito"),
         carisma: i(reg, "carisma"),
         determinacao: i(reg, "determinacao"),
+        // O v1 não tinha esses campos; ficha antiga importa com "" e o
+        // usuário completa depois (ver PersonagemInput::raca no contrato).
+        raca: s(reg, "raca"),
+        oficio: s(reg, "oficio"),
         retrato_id,
     };
     let pid = inserir_personagem(conn, &np)?;
@@ -65,10 +69,18 @@ fn importar_registro(
     }
     if let Some(arr) = reg.get("pericias").and_then(|x| x.as_array()) {
         for p in arr {
+            // O v1 tinha `nivel`, mas perícia nunca teve nível neste sistema
+            // (ver migration 0013) — o campo do JSON antigo é ignorado.
+            // `atributo` vem em texto humano da mesma fonte de regras que
+            // causou o bug original (ver migration 0013) — normaliza pra
+            // slug antes de gravar, senão o import reintroduz o bug.
+            let atributo = crate::domain::pericias::serializar_atributos(
+                &crate::domain::pericias::parse_atributos(&s(p, "atributo")),
+            );
             conn.execute(
-                "INSERT INTO personagem_pericia (personagem_id,nome,descricao,atributo,nivel) \
-                 VALUES (?1,?2,?3,?4,?5)",
-                params![pid, s(p, "nome"), s(p, "descricao"), s(p, "atributo"), i(p, "nivel")],
+                "INSERT INTO personagem_pericia (personagem_id,nome,descricao,atributo) \
+                 VALUES (?1,?2,?3,?4)",
+                params![pid, s(p, "nome"), s(p, "descricao"), atributo],
             )?;
         }
     }
@@ -160,9 +172,16 @@ pub fn importar_catalogos(
     let p: Value = serde_json::from_str(pericias_json)?;
     if let Some(arr) = p.get("pericias").and_then(|x| x.as_array()) {
         for it in arr {
+            // `nome` não é UNIQUE no schema — sem esta guarda, importar v1 num
+            // banco onde a migration 0013 já semeou o Compêndio duplica cada
+            // perícia/vantagem/desvantagem que também exista no JSON antigo.
+            let atributo = crate::domain::pericias::serializar_atributos(
+                &crate::domain::pericias::parse_atributos(&s(it, "atributo")),
+            );
             conn.execute(
-                "INSERT INTO catalogo_pericia (nome,descricao,atributo) VALUES (?1,?2,?3)",
-                params![s(it, "nome"), s(it, "descricao"), s(it, "atributo")],
+                "INSERT INTO catalogo_pericia (nome,descricao,atributo) \
+                 SELECT ?1,?2,?3 WHERE NOT EXISTS (SELECT 1 FROM catalogo_pericia WHERE nome = ?1)",
+                params![s(it, "nome"), s(it, "descricao"), atributo],
             )?;
         }
     }
@@ -170,7 +189,8 @@ pub fn importar_catalogos(
     if let Some(arr) = v.get("vantagens").and_then(|x| x.as_array()) {
         for it in arr {
             conn.execute(
-                "INSERT INTO catalogo_vantagem (nome,descricao,efeito) VALUES (?1,?2,?3)",
+                "INSERT INTO catalogo_vantagem (nome,descricao,efeito) \
+                 SELECT ?1,?2,?3 WHERE NOT EXISTS (SELECT 1 FROM catalogo_vantagem WHERE nome = ?1)",
                 params![s(it, "nome"), s(it, "descricao"), s(it, "efeito")],
             )?;
         }
@@ -179,7 +199,8 @@ pub fn importar_catalogos(
     if let Some(arr) = d.get("desvantagens").and_then(|x| x.as_array()) {
         for it in arr {
             conn.execute(
-                "INSERT INTO catalogo_desvantagem (nome,descricao,efeito) VALUES (?1,?2,?3)",
+                "INSERT INTO catalogo_desvantagem (nome,descricao,efeito) \
+                 SELECT ?1,?2,?3 WHERE NOT EXISTS (SELECT 1 FROM catalogo_desvantagem WHERE nome = ?1)",
                 params![s(it, "nome"), s(it, "descricao"), s(it, "efeito")],
             )?;
         }
@@ -274,8 +295,61 @@ mod tests {
     }
 
     #[test]
+    fn importa_pericia_com_atributo_em_texto_humano_normaliza_para_slug() {
+        let conn = open_in_memory().unwrap();
+        let tmp = std::env::temp_dir().join("rpgv2_test_atributo_humano");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        // Mesmo texto humano que causou o bug original (ver migration 0013):
+        // o JSON do v1 vem da mesma fonte de regras, então precisa passar
+        // pelo mesmo normalizador antes de cair no banco.
+        let jog = format!(
+            r#"{{"Robin":{{"nome":"Robin","forca":5,
+            "pericias":[{{"nome":"Arqueologia","descricao":"","atributo":"(Percepção/Intuição)"}}]}}}}"#
+        );
+        let npc = "{}";
+
+        importar_jogadores_npcs(&conn, &tmp, &jog, npc).unwrap();
+
+        let atributo: String = conn
+            .query_row("SELECT atributo FROM personagem_pericia", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(atributo, "percepcao,intuicao");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn importa_catalogos_nao_duplica_nome_ja_existente() {
+        let conn = open_in_memory().unwrap();
+        // "Natação" já existe no Compêndio seedado pela migration 0013 — este
+        // é o cenário do bug: instalação nova + import v1 com nome repetido.
+        let c = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        let antes = c("SELECT count(*) FROM catalogo_pericia WHERE nome = 'Natação'");
+        assert_eq!(antes, 1, "pré-condição: migration 0013 já semeia 'Natação'");
+
+        importar_catalogos(
+            &conn,
+            r#"{"pericias":[{"nome":"Natação","descricao":"d","atributo":"agilidade"}]}"#,
+            r#"{"vantagens":[]}"#,
+            r#"{"desvantagens":[]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(c("SELECT count(*) FROM catalogo_pericia WHERE nome = 'Natação'"), 1);
+    }
+
+    #[test]
     fn importa_catalogos_ok() {
         let conn = open_in_memory().unwrap();
+        let c = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        // Base não é zero: migration 0013 seeda o Compêndio (12 perícias, 17 vantagens,
+        // 29 desvantagens) — a asserção soma a partir dela, não parte de zero.
+        let (base_p, base_v, base_d) = (
+            c("SELECT count(*) FROM catalogo_pericia"),
+            c("SELECT count(*) FROM catalogo_vantagem"),
+            c("SELECT count(*) FROM catalogo_desvantagem"),
+        );
         importar_catalogos(
             &conn,
             r#"{"pericias":[{"nome":"Furtividade","descricao":"d","atributo":"agilidade"}]}"#,
@@ -283,10 +357,9 @@ mod tests {
             r#"{"desvantagens":[{"nome":"Codigo","descricao":"d","efeito":"e"}]}"#,
         )
         .unwrap();
-        let c = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
-        assert_eq!(c("SELECT count(*) FROM catalogo_pericia"), 1);
-        assert_eq!(c("SELECT count(*) FROM catalogo_vantagem"), 1);
-        assert_eq!(c("SELECT count(*) FROM catalogo_desvantagem"), 1);
+        assert_eq!(c("SELECT count(*) FROM catalogo_pericia"), base_p + 1);
+        assert_eq!(c("SELECT count(*) FROM catalogo_vantagem"), base_v + 1);
+        assert_eq!(c("SELECT count(*) FROM catalogo_desvantagem"), base_d + 1);
     }
 
     #[test]
@@ -302,6 +375,9 @@ mod tests {
         let van = r#"{"vantagens":[]}"#;
         let des = r#"{"desvantagens":[]}"#;
 
+        // Base não é zero: migration 0013 seeda o Compêndio (12 perícias).
+        let base_cat: i64 = conn.query_row("SELECT count(*) FROM catalogo_pericia", [], |r| r.get(0)).unwrap();
+
         let a = importar_v1_completo(&conn, &tmp, &jog, npc, per, van, des).unwrap();
         assert_eq!(a, (2, 1)); // 2 jogadores, 1 npc
 
@@ -312,7 +388,7 @@ mod tests {
         let total: i64 = conn.query_row("SELECT count(*) FROM personagem", [], |r| r.get(0)).unwrap();
         assert_eq!(total, 3); // ainda 3, não 6
         let cat: i64 = conn.query_row("SELECT count(*) FROM catalogo_pericia", [], |r| r.get(0)).unwrap();
-        assert_eq!(cat, 1); // catálogo também não duplicou
+        assert_eq!(cat, base_cat + 1); // catálogo também não duplicou
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

@@ -13,6 +13,24 @@ const OPCOES_TIPO = [
   { valor: "npc", label: "NPC" },
 ];
 
+// Listas fechadas (acordadas no contrato de tipos) — NPC como "Barril" fica sem raça/ofício.
+const OPCAO_VAZIA = { valor: "", label: "— não definida" };
+const RACAS = ["Humano", "Skypean", "Tritão", "Lunariano", "Ogro", "Mink"];
+const OFICIOS = [
+  "Arqueólogo",
+  "Artista",
+  "Carpinteiro",
+  "Cientista",
+  "Cozinheiro",
+  "Ferreiro",
+  "Gatuno",
+  "Médico",
+  "Curandeiro",
+  "Navegador",
+];
+const OPCOES_RACA = [OPCAO_VAZIA, ...RACAS.map((r) => ({ valor: r, label: r }))];
+const OPCOES_OFICIO = [OPCAO_VAZIA, ...OFICIOS.map((o) => ({ valor: o, label: o }))];
+
 export default function SecaoBase({
   valor,
   onChange,
@@ -39,6 +57,20 @@ export default function SecaoBase({
         onChange={(tipo) => onChange({ tipo: tipo === "npc" ? "npc" : "jogador" })}
         opcoes={OPCOES_TIPO}
       />
+      <div className="grid grid-cols-2 gap-2">
+        <Select
+          label="Raça"
+          valor={valor.raca}
+          onChange={(raca) => onChange({ raca })}
+          opcoes={OPCOES_RACA}
+        />
+        <Select
+          label="Ofício"
+          valor={valor.oficio}
+          onChange={(oficio) => onChange({ oficio })}
+          opcoes={OPCOES_OFICIO}
+        />
+      </div>
       <Textarea
         label="Descrição"
         valor={valor.descricao}

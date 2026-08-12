@@ -12,7 +12,7 @@ export function periciaParaInput(p: CatalogoPericia): CatalogoPericiaInput {
 
 /** Input de uma perícia nova em branco. */
 export function periciaInputVazio(): CatalogoPericiaInput {
-  return { nome: "", descricao: "", atributo: "forca" };
+  return { nome: "", descricao: "", atributo: "" };
 }
 
 /** Descarta o id pra montar o input de save de uma vantagem/desvantagem do catálogo. */

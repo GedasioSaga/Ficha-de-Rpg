@@ -60,6 +60,8 @@ fn para_exportada(p: PersonagemCompleto, images_dir: &Path) -> FichaExportada {
         espirito: atributo(&p, "espirito"),
         carisma: atributo(&p, "carisma"),
         determinacao: atributo(&p, "determinacao"),
+        raca: p.raca.clone(),
+        oficio: p.oficio.clone(),
         retrato: embutir_retrato(images_dir, &p.retrato),
         habilidades: p.habilidades,
         pericias: p.pericias,
@@ -148,6 +150,8 @@ fn para_input(f: FichaExportada, nome: String) -> PersonagemInput {
         espirito: f.espirito,
         carisma: f.carisma,
         determinacao: f.determinacao,
+        raca: f.raca,
+        oficio: f.oficio,
         retrato: retrato_para_input(f.retrato),
         habilidades: f
             .habilidades
@@ -170,7 +174,6 @@ fn para_input(f: FichaExportada, nome: String) -> PersonagemInput {
                 nome: p.nome,
                 descricao: p.descricao,
                 atributo: p.atributo,
-                nivel: p.nivel,
             })
             .collect(),
         vantagens: f
@@ -315,6 +318,8 @@ mod tests {
             espirito: 0,
             carisma: 0,
             determinacao: 0,
+            raca: "Mink".into(),
+            oficio: "Ferreiro".into(),
             retrato: None,
             habilidades: vec![habilidade_completa("Grande Chifre")],
             pericias: Vec::new(),
@@ -354,6 +359,8 @@ mod tests {
         assert_eq!(volta[0].nome, "Smoker");
         assert_eq!(volta[0].hp, 10);
         assert_eq!(volta[0].forca, 3);
+        assert_eq!(volta[0].raca, "Mink");
+        assert_eq!(volta[0].oficio, "Ferreiro");
         assert_eq!(volta[0].etiquetas, vec!["Marinha".to_string()]);
 
         // Campos da técnica sobrevivem à ida e à volta, um a um (forma base…).

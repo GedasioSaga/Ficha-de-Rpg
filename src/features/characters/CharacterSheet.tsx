@@ -16,7 +16,7 @@ import Tabs, { type Aba } from "../../components/Tabs";
 import StatBlock from "./StatBlock";
 import CamposTecnica from "./CamposTecnica";
 import { gradienteDoNome, iniciais } from "./retrato";
-import { ABREV_ATRIBUTO } from "./atributos";
+import { ATRIBUTOS, ABREV_ATRIBUTO } from "./atributos";
 import { exportarComDialogo } from "./portabilidade";
 
 const BOTAO_TOPO =
@@ -119,7 +119,23 @@ export default function CharacterSheet() {
         <EsqueletoFicha />
       ) : (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(280px,360px)_1fr]">
-          <StatBlock p={data} />
+          <div className="space-y-3">
+            {(data.raca || data.oficio) && (
+              <div className="flex flex-wrap gap-1.5">
+                {data.raca && (
+                  <span className="rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-xs font-medium text-slate-300">
+                    {data.raca}
+                  </span>
+                )}
+                {data.oficio && (
+                  <span className="rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-xs font-medium text-slate-300">
+                    {data.oficio}
+                  </span>
+                )}
+              </div>
+            )}
+            <StatBlock p={data} />
+          </div>
           <div className="min-w-0">
             <Tabs abas={montarAbas(data.habilidades, data.pericias, data.vantagens, data.desvantagens, data.transformacoes)} />
           </div>
@@ -195,30 +211,53 @@ function ListaHabilidades({ itens }: { itens: HabilidadeDto[] }) {
   );
 }
 
+/**
+ * "percepcao,intuicao" -> "PER · INT". Ficha importada da versão antiga pode
+ * trazer texto livre (ex.: "(Percepção/Intuição)") em vez do CSV de slugs — um
+ * `slice(0,3)` nesse lixo virava "(PE" sem avisar ninguém. Em vez de truncar,
+ * sinaliza como não reconhecido e mostra o texto original.
+ */
+function rotuloAtributosCsv(csv: string): { texto: string; legado: boolean } {
+  const tokens = csv
+    .split(",")
+    .map((a) => a.trim())
+    .filter(Boolean);
+  const todosCanonicos =
+    tokens.length > 0 && tokens.every((a) => (ATRIBUTOS as readonly string[]).includes(a));
+
+  if (!todosCanonicos) return { texto: csv, legado: true };
+  return { texto: tokens.map((a) => ABREV_ATRIBUTO[a]).join(" · "), legado: false };
+}
+
 function ListaPericias({ itens }: { itens: PericiaDto[] }) {
   if (itens.length === 0) return <ListaVazia texto="Nenhuma perícia." />;
   return (
     <ul className="space-y-2.5">
-      {itens.map((p, i) => (
+      {itens.map((p, i) => {
+        const rotulo = p.atributo ? rotuloAtributosCsv(p.atributo) : null;
+        return (
         <li key={`${p.nome}-${i}`} className={CARTAO}>
           <div className="flex items-start justify-between gap-3">
             <h4 className="font-medium text-slate-100">{p.nome}</h4>
-            <div className="flex shrink-0 items-center gap-1.5">
-              {p.atributo && (
-                <span className="rounded-md border border-slate-700 bg-slate-800 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wide text-slate-300">
-                  {ABREV_ATRIBUTO[p.atributo] ?? p.atributo}
-                </span>
-              )}
-              <span className="rounded-md border border-indigo-500/40 bg-indigo-500/15 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-indigo-200">
-                Nv {p.nivel}
+            {rotulo && rotulo.legado ? (
+              <span
+                className="shrink-0 rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-300"
+                title={`Atributo não reconhecido nesta ficha: "${rotulo.texto}"`}
+              >
+                Não reconhecido: {rotulo.texto}
               </span>
-            </div>
+            ) : rotulo ? (
+              <span className="shrink-0 rounded-md border border-slate-700 bg-slate-800 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wide text-slate-300">
+                {rotulo.texto}
+              </span>
+            ) : null}
           </div>
           {p.descricao && (
             <p className="mt-1.5 text-sm leading-relaxed text-slate-400">{p.descricao}</p>
           )}
         </li>
-      ))}
+        );
+      })}
     </ul>
   );
 }

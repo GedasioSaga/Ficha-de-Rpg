@@ -28,6 +28,9 @@ fn migrations() -> Migrations<'static> {
             "../../migrations/0011_habilidade_acao_efeito_extras.sql"
         )),
         M::up(include_str!("../../migrations/0012_sync_revisao.sql")),
+        M::up(include_str!(
+            "../../migrations/0013_pericias_raca_compendio.sql"
+        )),
     ])
 }
 

@@ -32,6 +32,7 @@ import {
   limitarMencoes,
   montarContextoTexto,
   montarIndiceElenco,
+  selecionarNotasRegras,
   systemPromptPara,
 } from "./prompts";
 import { definirConversa, limparConversa, useConversa } from "./conversaIA";
@@ -140,14 +141,19 @@ export default function PainelIA({
   /**
    * Carrega a ficha completa de cada personagem citado na pergunta e que ainda
    * não está no contexto, até o teto de fichas. Falha de uma ficha não derruba a
-   * pergunta: a IA segue com o índice do elenco.
+   * pergunta — mas o nome vai em `falhas` pra `montarContextoTexto` declarar a
+   * lacuna no contexto, em vez de a IA simular o personagem só com o índice
+   * como se fosse a ficha completa.
    */
-  async function fichasCitadas(texto: string): Promise<FichaParaContexto[]> {
+  async function fichasCitadas(
+    texto: string,
+  ): Promise<{ carregadas: FichaParaContexto[]; falhas: string[] }> {
     const ids = limitarMencoes(
       idsSemFicha(detectarMencoes(texto, elenco), elenco, fichas),
       fichas.length,
     );
     const carregadas: FichaParaContexto[] = [];
+    const falhas: string[] = [];
     for (const id of ids) {
       try {
         const p = await qc.fetchQuery({
@@ -156,18 +162,21 @@ export default function PainelIA({
         });
         carregadas.push(dePersonagemCompleto(p));
       } catch {
-        // Segue sem essa ficha — o índice do elenco ainda cobre o personagem.
+        const nome = elenco.find((p) => p.id === id)?.nome;
+        if (nome) falhas.push(nome);
       }
     }
-    return carregadas;
+    return { carregadas, falhas };
   }
 
   /**
    * O contexto (índice do elenco + fichas + regras + catálogos) e os retratos
    * viajam só na ÚLTIMA mensagem: refletem sempre o estado atual (ficha em
    * edição, seleção nova) sem repetir o bloco inteiro a cada turno.
+   * `tudo` (botão "Analisar") manda TODAS as notas de regra, sem o filtro por
+   * pergunta — o mestre pediu relatório completo.
    */
-  async function enviar(texto: string) {
+  async function enviar(texto: string, tudo = false) {
     if (!catalogos || enviando.current) return;
     marcarOcupado(true);
     const anterior = historico;
@@ -178,8 +187,17 @@ export default function PainelIA({
     try {
       setHistorico(conversa);
       setPergunta("");
-      const fichasContexto = [...fichas, ...(await fichasCitadas(texto))];
-      const contexto = montarContextoTexto(fichasContexto, notasRegras, catalogos, indiceElenco);
+      const { carregadas, falhas } = await fichasCitadas(texto);
+      const fichasContexto = [...fichas, ...carregadas];
+      const { incluidas, omitidas } = selecionarNotasRegras(texto, fichasContexto, notasRegras, tudo);
+      const contexto = montarContextoTexto(
+        fichasContexto,
+        incluidas,
+        catalogos,
+        indiceElenco,
+        omitidas,
+        falhas,
+      );
       // A imagem é pesada: vai na primeira mensagem (pra ancorar o conceito) e
       // depois só quando a pergunta for sobre o visual.
       const imagensAnexar =
@@ -188,11 +206,14 @@ export default function PainelIA({
         imagensAnexar.length > 0
           ? `\n\n(Imagens anexadas, nesta ordem: ${imagensAnexar.map((i) => i.nome).join(", ")}.)`
           : "";
+      // Fronteira explícita: modelo pequeno obedece a última instrução que leu,
+      // então marcar onde o contexto termina e a pergunta do mestre começa
+      // ajuda a não misturar "regra do sistema" com "o que foi perguntado".
       const comContexto = conversa.map((m, i) =>
         i === conversa.length - 1
           ? {
               ...m,
-              texto: `${contexto}\n\n${texto}${legenda}`,
+              texto: `${contexto}\n\n---\nPERGUNTA DO MESTRE:\n${texto}${legenda}`,
               imagens: imagensAnexar.map((i) => i.imagem),
             }
           : m,
@@ -246,7 +267,10 @@ export default function PainelIA({
           type="button"
           disabled={!podeEnviar || fichas.length === 0}
           onClick={() =>
-            void enviar(fichas.length === 1 ? "Analise esta ficha." : "Analise o balanceamento.")
+            void enviar(
+              fichas.length === 1 ? "Analise esta ficha." : "Analise o balanceamento.",
+              true,
+            )
           }
           title={fichas.length === 0 ? "Selecione ao menos um personagem" : undefined}
           className="rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-400 disabled:opacity-50"

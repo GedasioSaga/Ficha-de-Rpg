@@ -5,7 +5,7 @@ describe("extrairPericias", () => {
   test("parseia o JSON devolvido pelo modelo", async () => {
     const gerarFn = vi
       .fn()
-      .mockResolvedValue('[{"nome":"Pesca","descricao":"pescar","atributo":"percepcao"}]');
+      .mockResolvedValue('[{"nome":"Pesca","descricao":"pescar","atributo":["percepcao"]}]');
     const r = await extrairPericias("texto do canal", gerarFn);
     expect(r).toEqual([{ nome: "Pesca", descricao: "pescar", atributo: "percepcao" }]);
     // prompt leva o texto do canal e pede schema JSON
@@ -21,7 +21,7 @@ describe("extrairPericias", () => {
   test("entrada sem nome é descartada", async () => {
     const gerarFn = vi
       .fn()
-      .mockResolvedValue('[{"nome":"","descricao":"d","atributo":"forca"},{"nome":"Ok","descricao":"d","atributo":"forca"}]');
+      .mockResolvedValue('[{"nome":"","descricao":"d","atributo":["forca"]},{"nome":"Ok","descricao":"d","atributo":["forca"]}]');
     const r = await extrairPericias("x", gerarFn);
     expect(r).toHaveLength(1);
     expect(r[0].nome).toBe("Ok");

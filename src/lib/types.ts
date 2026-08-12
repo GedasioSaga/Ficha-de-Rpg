@@ -15,6 +15,10 @@ export interface PersonagemResumo {
   determinacao: number;
   /** Nomes das etiquetas (só NPCs têm; jogador vem sempre vazio). */
   etiquetas: string[];
+  /** Raça (lista fechada); "" quando não definida (ex.: NPC tipo "Barril"). */
+  raca: string;
+  /** Ofício (lista fechada); "" quando não definido. */
+  oficio: string;
 }
 
 /** Um dos 8 atributos com o rank (0–13) já calculado pelo backend. */
@@ -52,8 +56,8 @@ export interface HabilidadeDto {
 export interface PericiaDto {
   nome: string;
   descricao: string;
+  /** Slugs canônicos separados por vírgula: "percepcao,intuicao". Perícia pode ter mais de um atributo. */
   atributo: string;
-  nivel: number;
   uid?: string; // chave de render no editor (client-only; ver HabilidadeDto.uid)
 }
 
@@ -95,6 +99,10 @@ export interface PersonagemCompleto {
   desvantagens: TracoDto[];
   transformacoes: TransformacaoDto[];
   etiquetas: string[];
+  /** Raça (lista fechada); "" quando não definida (ex.: NPC tipo "Barril"). */
+  raca: string;
+  /** Ofício (lista fechada); "" quando não definido. */
+  oficio: string;
 }
 
 /* ------------------------------- Entrada (save) --------------------------- */
@@ -133,12 +141,16 @@ export interface PersonagemInput {
   determinacao: number;
   retrato: RetratoInput;
   habilidades: HabilidadeDto[];
-  pericias: PericiaDto[]; // {nome, descricao, atributo, nivel}
+  pericias: PericiaDto[]; // {nome, descricao, atributo}
   vantagens: TracoDto[]; // {nome, descricao, efeito}
   desvantagens: TracoDto[];
   transformacoes: TransformacaoInput[];
   /** Etiquetas por nome; o backend faz upsert. Ignorado quando `tipo === "jogador"`. */
   etiquetas: string[];
+  /** Raça (lista fechada); "" quando não definida (ex.: NPC tipo "Barril"). */
+  raca: string;
+  /** Ofício (lista fechada); "" quando não definido. */
+  oficio: string;
 }
 
 /* -------------------------------- Etiquetas ------------------------------- */
@@ -179,6 +191,7 @@ export interface CatalogoPericia {
   id: number;
   nome: string;
   descricao: string;
+  /** Slugs canônicos separados por vírgula: "percepcao,intuicao". */
   atributo: string;
 }
 
@@ -202,6 +215,7 @@ export type TipoTraco = "vantagem" | "desvantagem";
 export interface CatalogoPericiaInput {
   nome: string;
   descricao: string;
+  /** Slugs canônicos separados por vírgula: "percepcao,intuicao". */
   atributo: string;
 }
 

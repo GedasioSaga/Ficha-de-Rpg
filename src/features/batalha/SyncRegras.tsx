@@ -26,7 +26,16 @@ import { useToast } from "../../components/Toast";
 const CONFIG_MAPA = "sync_regras_mapa";
 const LIMITE_MENSAGENS = 200;
 
-type Destino = "" | "nota" | "pericias" | "vantagens" | "desvantagens";
+// "nota" = regra (entra no contexto da IA); "nota_livre" = fica só na tela de
+// Notas — caso de #ficha (ficha de exemplo) e #dicas-do-mestre (cita outro RPG).
+type Destino = "" | "nota" | "nota_livre" | "pericias" | "vantagens" | "desvantagens";
+
+/** Slugs CSV não têm ordem garantida — "percepcao,intuicao" == "intuicao,percepcao". */
+function atributoIguais(a: string, b: string): boolean {
+  const normalizar = (s: string) =>
+    s.split(",").map((v) => v.trim()).filter(Boolean).sort().join(",");
+  return normalizar(a) === normalizar(b);
+}
 
 type Preview =
   | { destino: "pericias"; canalNome: string; diff: DiffResultado<CatalogoPericiaInput> }
@@ -88,7 +97,7 @@ export default function SyncRegras({
       const catalogos = await listarCatalogos();
 
       // Fase 1: ler + extrair, sem gravar nada.
-      const notasPendentes: { titulo: string; corpo: string }[] = [];
+      const notasPendentes: { titulo: string; corpo: string; ehRegra: boolean }[] = [];
       const novosPreviews: Preview[] = [];
 
       for (const canal of escolhidos) {
@@ -96,15 +105,19 @@ export default function SyncRegras({
         if (!texto) continue; // canal vazio (ou intent do portal desligado)
         const destino = mapa[canal.id];
 
-        if (destino === "nota") {
-          notasPendentes.push({ titulo: `#${canal.nome}`, corpo: texto });
+        if (destino === "nota" || destino === "nota_livre") {
+          notasPendentes.push({
+            titulo: `#${canal.nome}`,
+            corpo: texto,
+            ehRegra: destino === "nota",
+          });
         } else if (destino === "pericias") {
           const extraidas = await extrairPericias(texto);
           novosPreviews.push({
             destino,
             canalNome: canal.nome,
             diff: diffPorNome(catalogos.pericias, extraidas, (a, n) =>
-              a.descricao === n.descricao && a.atributo === n.atributo,
+              a.descricao === n.descricao && atributoIguais(a.atributo, n.atributo),
             ),
           });
         } else if (destino === "vantagens" || destino === "desvantagens") {
@@ -123,21 +136,38 @@ export default function SyncRegras({
         }
       }
 
+      // Canais homônimos (dois canais "ficha") upsertam a mesma nota em sequência —
+      // o segundo sobrescreve o primeiro silenciosamente. Não impede (upsert
+      // continua valendo), só avisa pro dono ignorar um dos dois canais.
+      const titulosRepetidos = [
+        ...new Set(
+          notasPendentes
+            .map((n) => n.titulo)
+            .filter((titulo, i, todos) => todos.indexOf(titulo) !== i),
+        ),
+      ];
+
       // Fase 2: só chega aqui se a fase 1 inteira passou — grava as notas.
-      const titulosNotas: string[] = [];
+      const titulosRegras = new Set<string>();
       for (const n of notasPendentes) {
         await upsertNotaPorTitulo(n.titulo, n.corpo);
-        titulosNotas.push(n.titulo);
+        if (n.ehRegra) titulosRegras.add(n.titulo);
       }
+      const titulosNotas = [...titulosRegras];
       await configSet(CONFIG_REGRAS_NOTAS, JSON.stringify(titulosNotas));
-      return { titulosNotas, novosPreviews };
+      return { titulosNotas, novosPreviews, titulosRepetidos };
     },
-    onSuccess: ({ titulosNotas, novosPreviews }) => {
+    onSuccess: ({ titulosNotas, novosPreviews, titulosRepetidos }) => {
       qc.invalidateQueries({ queryKey: ["notas"] });
       qc.invalidateQueries({ queryKey: ["config"] });
       setPreviews(novosPreviews);
+      if (titulosRepetidos.length > 0) {
+        toast.erro(
+          `Canais homônimos: ${titulosRepetidos.join(", ")} — só o último escolhido foi salvo. Ignore um dos canais duplicados.`,
+        );
+      }
       toast.sucesso(
-        `${titulosNotas.length} nota(s) sincronizada(s)` +
+        `${titulosNotas.length} nota(s) de regra sincronizada(s)` +
           (novosPreviews.length > 0 ? " — revise o catálogo abaixo." : "."),
       );
     },
@@ -174,8 +204,9 @@ export default function SyncRegras({
           Regras do jogo
         </h2>
         <p className="mt-1 text-sm text-slate-500">
-          Escolha o destino de cada canal: Nota (texto fiel) ou Compêndio (extração
-          via IA, com revisão antes de gravar).
+          Escolha o destino de cada canal: Nota (regra, entra no contexto da IA),
+          Nota (não é regra, fica só na tela de Notas — ex.: ficha de exemplo, etiqueta
+          de mesa) ou Compêndio (extração via IA, com revisão antes de gravar).
         </p>
       </div>
 
@@ -189,7 +220,8 @@ export default function SyncRegras({
               className="h-8 rounded-lg border border-slate-800 bg-slate-950/60 px-2 text-xs text-slate-300 focus:border-indigo-500 focus:outline-none"
             >
               <option value="">— ignorar</option>
-              <option value="nota">Nota</option>
+              <option value="nota">Nota (regra)</option>
+              <option value="nota_livre">Nota (não é regra)</option>
               <option value="pericias">Compêndio: perícias</option>
               <option value="vantagens">Compêndio: vantagens</option>
               <option value="desvantagens">Compêndio: desvantagens</option>

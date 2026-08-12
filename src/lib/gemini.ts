@@ -162,6 +162,16 @@ export interface OpcoesGeracao {
   gravarConfig?: (chave: string, valor: string) => Promise<void>;
 }
 
+/**
+ * Baixa mas não zero: resposta consistente (números de balanceamento não podem
+ * mudar a cada pergunta igual) sem ficar robótica. Sem isso o Gemini roda no
+ * default da API (1.0) — o ajuste mais inventivo possível.
+ */
+const TEMPERATURA_PADRAO = 0.2;
+
+/** Corta a cauda de tokens improváveis — reduz alucinação sem travar a variedade da resposta. */
+const TOP_P_PADRAO = 0.9;
+
 /** Corpo do POST generateContent — função pura, testável. */
 export function montarCorpo(mensagens: MensagemIA[], opts: OpcoesGeracao = {}): unknown {
   const corpo: Record<string, unknown> = {
@@ -178,12 +188,15 @@ export function montarCorpo(mensagens: MensagemIA[], opts: OpcoesGeracao = {}): 
   if (opts.systemPrompt) {
     corpo.system_instruction = { parts: [{ text: opts.systemPrompt }] };
   }
-  if (opts.responseSchema) {
-    corpo.generationConfig = {
-      responseMimeType: "application/json",
-      responseSchema: opts.responseSchema,
-    };
-  }
+  // `responseSchema`, quando presente, precisa coexistir no MESMO objeto —
+  // dois `generationConfig` no corpo faria a API descartar um dos dois.
+  corpo.generationConfig = {
+    temperature: TEMPERATURA_PADRAO,
+    topP: TOP_P_PADRAO,
+    ...(opts.responseSchema
+      ? { responseMimeType: "application/json", responseSchema: opts.responseSchema }
+      : {}),
+  };
   return corpo;
 }
 

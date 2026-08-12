@@ -1,5 +1,5 @@
 import type { CatalogoPericia, PericiaDto } from "../../../lib/types";
-import { CampoNumero, CampoTexto, SelectAtributo, Textarea } from "./Campos";
+import { CampoTexto, MultiAtributo, Textarea } from "./Campos";
 import { novaChave } from "./chave";
 import CatalogoPicker from "./CatalogoPicker";
 import ListaEditavel from "./ListaEditavel";
@@ -17,7 +17,7 @@ export default function PericiasEditor({
     <ListaEditavel<PericiaDto>
       itens={itens}
       onChange={onChange}
-      criarVazio={() => ({ nome: "", descricao: "", atributo: "forca", nivel: 0, uid: novaChave() })}
+      criarVazio={() => ({ nome: "", descricao: "", atributo: "", uid: novaChave() })}
       textoAdicionar="Adicionar perícia"
       textoVazio="Nenhuma perícia ainda."
       acaoExtra={
@@ -27,7 +27,7 @@ export default function PericiasEditor({
           onEscolher={(p) =>
             onChange([
               ...itens,
-              { nome: p.nome, descricao: p.descricao, atributo: p.atributo, nivel: 0, uid: novaChave() },
+              { nome: p.nome, descricao: p.descricao, atributo: p.atributo, uid: novaChave() },
             ])
           }
         />
@@ -41,14 +41,11 @@ export default function PericiasEditor({
             onChange={(descricao) => atualizar({ descricao })}
             linhas={2}
           />
-          <div className="grid grid-cols-2 gap-2">
-            <SelectAtributo
-              label="Atributo"
-              valor={item.atributo}
-              onChange={(atributo) => atualizar({ atributo })}
-            />
-            <CampoNumero label="Nível" valor={item.nivel} onChange={(nivel) => atualizar({ nivel })} />
-          </div>
+          <MultiAtributo
+            label="Atributos"
+            valor={item.atributo}
+            onChange={(atributo) => atualizar({ atributo })}
+          />
         </>
       )}
     />

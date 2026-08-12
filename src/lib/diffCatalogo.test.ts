@@ -12,6 +12,30 @@ describe("concatenarMensagens", () => {
   test("lista vazia vira string vazia", () => {
     expect(concatenarMensagens([])).toBe("");
   });
+
+  test("mensagem repetida literal: só a primeira ocorrência fica", () => {
+    expect(concatenarMensagens([msg("regra da raça"), msg("regra da raça")])).toBe(
+      "regra da raça",
+    );
+  });
+
+  test("repetida com espaçamento diferente também é descartada", () => {
+    expect(
+      concatenarMensagens([msg("regra   da\nraça"), msg("regra da raça")]),
+    ).toBe("regra   da\nraça");
+  });
+
+  test("nada repetido: não mexe na ordem nem no conteúdo", () => {
+    expect(concatenarMensagens([msg("a"), msg("b"), msg("c")])).toBe("a\n\nb\n\nc");
+  });
+
+  test("duas mensagens curtas iguais mas NÃO adjacentes são preservadas", () => {
+    // Ex.: "Efeito: nenhum." em dois itens de catálogo diferentes — coincidência
+    // de texto, não repetição de bloco. Não deve ser descartada.
+    expect(
+      concatenarMensagens([msg("Efeito: nenhum."), msg("outra coisa"), msg("Efeito: nenhum.")]),
+    ).toBe("Efeito: nenhum.\n\noutra coisa\n\nEfeito: nenhum.");
+  });
 });
 
 interface Atual { id: number; nome: string; descricao: string; }

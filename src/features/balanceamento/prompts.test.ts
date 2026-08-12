@@ -8,11 +8,13 @@ import {
   MAX_FICHAS_CONTEXTO,
   montarContextoTexto,
   montarIndiceElenco,
+  selecionarNotasRegras,
   systemPromptPara,
   SYSTEM_PROMPT_ANALISE,
   SYSTEM_PROMPT_FICHA,
   SYSTEM_PROMPT_GERAL,
 } from "./prompts";
+import type { FichaParaContexto } from "./prompts";
 import type {
   Catalogos,
   Nota,
@@ -39,6 +41,8 @@ const completo = {
     { nome: "Gear 2", descricao: "", retrato: "c:/img/g2.png", modificadores: [], habilidades: [] },
   ],
   etiquetas: [],
+  raca: "Humano",
+  oficio: "",
 } as PersonagemCompleto;
 
 const doForm = {
@@ -75,6 +79,8 @@ const doForm = {
   desvantagens: [],
   transformacoes: [],
   etiquetas: [],
+  raca: "Ogro",
+  oficio: "Ferreiro",
 } as PersonagemInput;
 
 const catalogos: Catalogos = { pericias: [], vantagens: [], desvantagens: [] };
@@ -89,6 +95,13 @@ describe("dePersonagemCompleto", () => {
 
   test("leva o id junto, pra dedupe", () => {
     expect(dePersonagemCompleto(completo).id).toBe(1);
+  });
+
+  test("leva raça, ofício e etiquetas — não descarta em silêncio", () => {
+    const f = dePersonagemCompleto({ ...completo, etiquetas: ["Marinha"] });
+    expect(f.raca).toBe("Humano");
+    expect(f.oficio).toBe("");
+    expect(f.etiquetas).toEqual(["Marinha"]);
   });
 });
 
@@ -108,6 +121,12 @@ describe("dePersonagemInput", () => {
   test("ficha nova não tem id; ficha em edição recebe o id do form", () => {
     expect(dePersonagemInput(doForm).id).toBeUndefined();
     expect(dePersonagemInput(doForm, 7).id).toBe(7);
+  });
+
+  test("leva raça e ofício do form", () => {
+    const f = dePersonagemInput(doForm);
+    expect(f.raca).toBe("Ogro");
+    expect(f.oficio).toBe("Ferreiro");
   });
 });
 
@@ -174,6 +193,37 @@ describe("montarContextoTexto", () => {
     expect(ctx).toContain("Luffy");
     expect(ctx).not.toContain('"id":1');
   });
+
+  test("seção omitida vira uma linha, não silêncio", () => {
+    const ctx = montarContextoTexto([dePersonagemCompleto(completo)], [], catalogos, "", [
+      "#pericias",
+    ]);
+    expect(ctx).toContain('(seção "#pericias" não enviada nesta pergunta — peça se precisar)');
+  });
+
+  test("repete a regra de ouro no fim do bloco, antes da pergunta do mestre", () => {
+    const ctx = montarContextoTexto([dePersonagemCompleto(completo)], [], catalogos);
+    expect(ctx.trim().endsWith("desvantagem que não esteja aqui.")).toBe(true);
+  });
+
+  test("ficha citada que falhou ao carregar vira uma linha declarada, não silêncio", () => {
+    const ctx = montarContextoTexto(
+      [dePersonagemCompleto(completo)],
+      [],
+      catalogos,
+      "",
+      [],
+      ["Vagn Kane"],
+    );
+    expect(ctx).toContain(
+      "(ficha detalhada de Vagn Kane não pôde ser carregada — só o resumo do índice está disponível)",
+    );
+  });
+
+  test("sem ficha falhada não aparece a seção", () => {
+    const ctx = montarContextoTexto([dePersonagemCompleto(completo)], [], catalogos);
+    expect(ctx).not.toContain("FICHAS QUE FALHARAM");
+  });
 });
 
 /** Elenco de teste: `PersonagemResumo` não tem HP/SP/escudo — só os 8 atributos. */
@@ -192,14 +242,15 @@ function resumo(id: number, nome: string, extra: Partial<PersonagemResumo> = {})
     carisma: 5,
     determinacao: 10,
     etiquetas: [],
+    raca: "",
     ...extra,
   } as PersonagemResumo;
 }
 
 /** Elenco reduzido: aqui a string do índice é asserida caractere a caractere. */
 const elencoIndice: PersonagemResumo[] = [
-  resumo(1, "Vagn Kane"),
-  resumo(2, "Siegfried", { tipo: "npc", forca: 13, etiquetas: ["Marinha"] }),
+  resumo(1, "Vagn Kane", { raca: "Humano" }),
+  resumo(2, "Siegfried", { tipo: "npc", forca: 13, raca: "Ogro", etiquetas: ["Marinha"] }),
 ];
 
 const npc = { tipo: "npc" } as Partial<PersonagemResumo>;
@@ -235,9 +286,11 @@ describe("montarIndiceElenco", () => {
   test("uma linha densa por personagem, com tipo e os 8 atributos", () => {
     const linhas = montarIndiceElenco(elencoIndice).split("\n");
     expect(linhas).toHaveLength(2);
-    expect(linhas[0]).toBe("Vagn Kane (PJ) — FOR 12 AGI 9 PER 7 RES 11 INT 6 ESP 8 CAR 5 DET 10");
+    expect(linhas[0]).toBe(
+      "Vagn Kane (PJ) — FOR 12 AGI 9 PER 7 RES 11 INT 6 ESP 8 CAR 5 DET 10 · Humano",
+    );
     expect(linhas[1]).toBe(
-      "Siegfried (NPC) — FOR 13 AGI 9 PER 7 RES 11 INT 6 ESP 8 CAR 5 DET 10 · Marinha",
+      "Siegfried (NPC) — FOR 13 AGI 9 PER 7 RES 11 INT 6 ESP 8 CAR 5 DET 10 · Ogro, Marinha",
     );
   });
 
@@ -365,5 +418,122 @@ describe("idsSemFicha", () => {
 
   test("id fora do elenco é descartado", () => {
     expect(idsSemFicha([99], elenco, [])).toEqual([]);
+  });
+});
+
+/** Nota de regra mínima — só o que `selecionarNotasRegras` olha. */
+function nota(titulo: string, corpo = "x"): Nota {
+  return { id: Math.random(), titulo, corpo, criado_em: "", atualizado_em: "" } as Nota;
+}
+
+const NOTAS_REGRAS = [
+  nota("#mecânicas"),
+  nota("#status"),
+  nota("#ações-de-combate"),
+  nota("#humano"),
+  nota("#ogro"),
+  nota("#mink"),
+  nota("#pericias"),
+  nota("#vantagens"),
+  nota("#desvantagens"),
+  nota("#oficios"),
+  nota("#akuma-no-mi"),
+  nota("#dicas-do-mestre"), // título fora de qualquer categoria conhecida
+];
+
+function ficha(raca: string): FichaParaContexto {
+  return dePersonagemInput({ ...doForm, raca });
+}
+
+describe("selecionarNotasRegras", () => {
+  test("o núcleo (mecânicas/status/ações-de-combate) sempre entra", () => {
+    const { incluidas } = selecionarNotasRegras("qualquer pergunta banal", [], NOTAS_REGRAS);
+    const titulos = incluidas.map((n) => n.titulo);
+    expect(titulos).toContain("#mecânicas");
+    expect(titulos).toContain("#status");
+    expect(titulos).toContain("#ações-de-combate");
+  });
+
+  test("raça da ficha no contexto traz a nota de raça, mesmo sem citar na pergunta", () => {
+    const { incluidas } = selecionarNotasRegras("como ele se sai?", [ficha("Ogro")], NOTAS_REGRAS);
+    expect(incluidas.map((n) => n.titulo)).toContain("#ogro");
+    expect(incluidas.map((n) => n.titulo)).not.toContain("#humano");
+  });
+
+  test("raça citada na pergunta traz a nota, mesmo sem ficha nenhuma", () => {
+    const { incluidas } = selecionarNotasRegras("como o Humano se compara ao Ogro?", [], NOTAS_REGRAS);
+    const titulos = incluidas.map((n) => n.titulo);
+    expect(titulos).toContain("#humano");
+    expect(titulos).toContain("#ogro");
+  });
+
+  test("palavra-chave da pergunta traz só a nota correspondente", () => {
+    const { incluidas, omitidas } = selecionarNotasRegras("quanto vale essa perícia?", [], NOTAS_REGRAS);
+    expect(incluidas.map((n) => n.titulo)).toContain("#pericias");
+    expect(omitidas).toContain("#vantagens");
+  });
+
+  test("'desvantagem' não arrasta '#vantagens' junto", () => {
+    const { incluidas } = selecionarNotasRegras("essa desvantagem é forte demais", [], NOTAS_REGRAS);
+    const titulos = incluidas.map((n) => n.titulo);
+    expect(titulos).toContain("#desvantagens");
+    expect(titulos).not.toContain("#vantagens");
+  });
+
+  test("citar o nome de um ofício conta como pedir #oficios", () => {
+    const { incluidas } = selecionarNotasRegras("um Ferreiro consegue fazer isso?", [], NOTAS_REGRAS);
+    expect(incluidas.map((n) => n.titulo)).toContain("#oficios");
+  });
+
+  test("tudo = true ignora o filtro inteiro", () => {
+    const { incluidas, omitidas } = selecionarNotasRegras("oi", [], NOTAS_REGRAS, true);
+    expect(incluidas).toHaveLength(NOTAS_REGRAS.length);
+    expect(omitidas).toEqual([]);
+  });
+
+  test("título desconhecido pelo mapa de categorias sempre entra", () => {
+    const { incluidas, omitidas } = selecionarNotasRegras("pergunta qualquer", [], NOTAS_REGRAS);
+    expect(incluidas.map((n) => n.titulo)).toContain("#dicas-do-mestre");
+    expect(omitidas).not.toContain("#dicas-do-mestre");
+  });
+
+  test("título duplicado na config entra uma vez só", () => {
+    const { incluidas } = selecionarNotasRegras("oi", [], [...NOTAS_REGRAS, nota("#mecânicas")]);
+    expect(incluidas.filter((n) => n.titulo === "#mecânicas")).toHaveLength(1);
+  });
+
+  test("raça no PLURAL na pergunta ainda traz a nota — \\b não casa fronteira letra→letra", () => {
+    const { incluidas } = selecionarNotasRegras(
+      "Como os Ogros se comparam aos Humanos em combate?",
+      [],
+      NOTAS_REGRAS,
+    );
+    const titulos = incluidas.map((n) => n.titulo);
+    expect(titulos).toContain("#ogro");
+    expect(titulos).toContain("#humano");
+  });
+
+  test("'frutas'/'logias' no plural ainda trazem #akuma-no-mi", () => {
+    expect(
+      selecionarNotasRegras("essas frutas do tipo logias são raras?", [], NOTAS_REGRAS).incluidas.map(
+        (n) => n.titulo,
+      ),
+    ).toContain("#akuma-no-mi");
+  });
+
+  test("nome de ofício no PLURAL também conta como pedir #oficios", () => {
+    const { incluidas } = selecionarNotasRegras("os ferreiros dessa vila são bons?", [], NOTAS_REGRAS);
+    expect(incluidas.map((n) => n.titulo)).toContain("#oficios");
+  });
+
+  test("raiz curta não casa palavra maior por coincidência (falso positivo)", () => {
+    // "mink" não pode casar "minkowski" nem "minigame" — a raiz é curta demais
+    // pra sustentar a diferença de letras (MAX_LETRAS_FLEXAO).
+    const { incluidas } = selecionarNotasRegras(
+      "essa curva de minkowski explica o minigame?",
+      [],
+      NOTAS_REGRAS,
+    );
+    expect(incluidas.map((n) => n.titulo)).not.toContain("#mink");
   });
 });

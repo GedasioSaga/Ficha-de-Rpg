@@ -45,15 +45,25 @@ describe("montarCorpo", () => {
         { role: "user", parts: [{ text: "oi" }] },
         { role: "model", parts: [{ text: "olá" }] },
       ],
+      generationConfig: { temperature: 0.2, topP: 0.9 },
     });
   });
 
-  test("responseSchema liga generationConfig JSON", () => {
+  test("sem responseSchema, generationConfig só tem temperature/topP (nunca 1.0 default)", () => {
+    const corpo = montarCorpo([{ role: "user", texto: "x" }]) as {
+      generationConfig?: Record<string, unknown>;
+    };
+    expect(corpo.generationConfig).toEqual({ temperature: 0.2, topP: 0.9 });
+  });
+
+  test("responseSchema liga generationConfig JSON, coexistindo com temperature/topP", () => {
     const schema = { type: "ARRAY", items: { type: "STRING" } };
     const corpo = montarCorpo([{ role: "user", texto: "x" }], {
       responseSchema: schema,
     }) as { generationConfig?: Record<string, unknown> };
     expect(corpo.generationConfig).toEqual({
+      temperature: 0.2,
+      topP: 0.9,
       responseMimeType: "application/json",
       responseSchema: schema,
     });
