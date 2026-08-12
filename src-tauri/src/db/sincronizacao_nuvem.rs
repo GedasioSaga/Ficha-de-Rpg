@@ -754,24 +754,24 @@ pub async fn planejar_baixar(
     }
 }
 
-/// O que o boot automático (plano §4 "Boot (automático)", Fase 3) deve fazer,
-/// decidido ANTES de qualquer I/O de substituição — mesma separação
-/// decisão/aplicação de [`PlanoBaixar`]. `Aplicar` só sai daqui quando o local
-/// está limpo; sujo vira `Conflito`, nunca `Aplicar`.
+/// O que a verificação de boot encontrou na nuvem — mesma separação
+/// decisão/aplicação de [`PlanoBaixar`], só que aqui NENHUMA das variantes
+/// aplica: o boot virou aviso puro (ver [`EventoBootSync`]). `Conflito` e
+/// `NuvemMaisNova` diferem só na mensagem que a UI mostra.
 pub enum PlanoBoot {
-    /// Sem pacote no transporte, em dia, ou local mais novo: nada a fazer no
-    /// boot. ("Sem transporte configurado" é decidido por quem CHAMA — ver
+    /// Sem pacote no transporte, em dia, ou local mais novo: nada a avisar.
+    /// ("Sem transporte configurado" é decidido por quem CHAMA — ver
     /// `lib.rs::montar_transporte` — antes mesmo de existir um `&dyn
     /// Transporte` pra passar aqui.)
     Nenhum,
-    /// Nuvem mais nova e local limpo: pode aplicar sozinho.
-    Aplicar(Manifesto),
-    /// Nuvem mais nova mas local sujo: setup não decide — devolve o
-    /// manifesto só pra registrar o evento; quem chama NÃO aplica.
+    /// Nuvem mais nova e local limpo: baixar não perderia nada.
+    NuvemMaisNova(Manifesto),
+    /// Nuvem mais nova mas local sujo: baixar sobrescreveria mudanças deste
+    /// PC — a UI avisa com texto mais forte.
     Conflito(Manifesto),
 }
 
-/// Decide o plano do boot automático (plano §4, Fase 3 — transporte abstrai
+/// Decide o que o boot vai AVISAR (plano §4, Fase 3 — transporte abstrai
 /// pasta local ou Google Drive): lê o manifesto remoto se houver pacote lá, e
 /// roda [`decidir_acao`]. Não aplica nada — só decide. Espelha
 /// `planejar_baixar`, mas sem `forcar` (o boot nunca força) e mapeando
@@ -789,26 +789,27 @@ pub async fn planejar_boot(
         return Ok(PlanoBoot::Nenhum);
     };
     match decidir_acao(Carimbo { contador: carimbo.contador }, Some(&nuvem), sujo) {
-        Acao::NuvemMaisNova => Ok(PlanoBoot::Aplicar(nuvem)),
+        Acao::NuvemMaisNova => Ok(PlanoBoot::NuvemMaisNova(nuvem)),
         Acao::Conflito => Ok(PlanoBoot::Conflito(nuvem)),
         Acao::EmDia | Acao::LocalMaisNovo | Acao::SemNuvem => Ok(PlanoBoot::Nenhum),
     }
 }
 
-/// O que aconteceu na verificação de boot (Fase 3): devolvido direto pelo
-/// comando `sync_verificar_boot` (`lib.rs`), chamado pelo frontend depois do
-/// render — não roda mais dentro do `.setup()` do Tauri, que não tem UI pra
-/// abrir o diálogo de conflito nem disparar um toast. `tipo` é o
-/// discriminante no JSON (`#[serde(tag = "tipo")]`).
+/// O que a verificação de boot ENCONTROU — nunca o que ela fez: desde
+/// 2026-08-11 (pedido do usuário: "só sincroniza quando eu apertar enviar ou
+/// baixar") o boot não move dado nenhum, só lê o manifesto remoto e avisa. As
+/// duas variantes abaixo viram o mesmo banner discreto no topo
+/// (`SyncBootDriver`), que manda o usuário até a tela Sincronização.
+/// `tipo` é o discriminante no JSON (`#[serde(tag = "tipo")]`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(tag = "tipo", rename_all = "snake_case")]
 pub enum EventoBootSync {
-    /// Nada aconteceu (sem pasta, sem pacote, em dia, ou já lido pela UI).
+    /// Nada a avisar (sem pasta, sem pacote, em dia, ou local mais novo).
     Nenhum,
-    /// Nuvem mais nova + local limpo: aplicada sozinha no boot, com backup.
-    AplicadoAutomaticamente { contador: i64 },
-    /// Nuvem mais nova + local sujo: NÃO aplicada; a UI decide (Baixar
-    /// perde locais com backup / Manter locais / Cancelar).
+    /// Nuvem mais nova + local limpo: dá pra baixar sem perder nada, mas quem
+    /// aperta Baixar é o usuário.
+    NuvemMaisNova { contador: i64 },
+    /// Nuvem mais nova + local sujo: baixar sobrescreveria mudanças deste PC.
     ConflitoPendente { contador_nuvem: i64 },
 }
 
@@ -1723,7 +1724,7 @@ mod tests {
     }
 
     #[test]
-    fn planejar_boot_nuvem_mais_nova_e_local_limpo_libera_aplicar() {
+    fn planejar_boot_nuvem_mais_nova_e_local_limpo_avisa_nuvem_mais_nova() {
         let (raiz, conn) = app_data_teste("boot_aplicar");
         let pasta_nuvem = raiz.join("nuvem");
         std::fs::create_dir_all(&pasta_nuvem).unwrap();
@@ -1737,13 +1738,13 @@ mod tests {
         carimbo_gravar(&conn, 3, "2026-08-10 10:00:00").unwrap();
 
         match planejar_boot_teste(&conn, &TransportePasta::new(&pasta_nuvem)) {
-            PlanoBoot::Aplicar(m) => assert_eq!(m.contador, 4),
-            _ => panic!("nuvem mais nova + local limpo devia liberar aplicar"),
+            PlanoBoot::NuvemMaisNova(m) => assert_eq!(m.contador, 4),
+            _ => panic!("nuvem mais nova + local limpo devia avisar nuvem mais nova"),
         }
     }
 
     #[test]
-    fn planejar_boot_nuvem_mais_nova_e_local_sujo_e_conflito_nunca_aplica() {
+    fn planejar_boot_nuvem_mais_nova_e_local_sujo_e_conflito_nunca_baixa_limpo() {
         let (raiz, conn) = app_data_teste("boot_conflito");
         let pasta_nuvem = raiz.join("nuvem");
         std::fs::create_dir_all(&pasta_nuvem).unwrap();
@@ -1759,7 +1760,9 @@ mod tests {
 
         match planejar_boot_teste(&conn, &TransportePasta::new(&pasta_nuvem)) {
             PlanoBoot::Conflito(m) => assert_eq!(m.contador, 4),
-            PlanoBoot::Aplicar(_) => panic!("boot NUNCA pode aplicar por cima de local sujo"),
+            PlanoBoot::NuvemMaisNova(_) => {
+                panic!("local sujo NUNCA pode virar aviso de 'baixar sem perder nada'")
+            }
             PlanoBoot::Nenhum => panic!("devia sinalizar conflito, não ficar em silêncio"),
         }
     }
@@ -2059,8 +2062,8 @@ mod tests {
         conn.execute("INSERT INTO nota (titulo, corpo) VALUES ('t', 'c')", []).unwrap();
 
         match planejar_boot_teste(&conn, &transporte) {
-            PlanoBoot::Aplicar(m) => assert_eq!(m.contador, 1),
-            _ => panic!("FIX4: primeira sync (contador 0) devia aplicar mesmo com sujo"),
+            PlanoBoot::NuvemMaisNova(m) => assert_eq!(m.contador, 1),
+            _ => panic!("FIX4: primeira sync (contador 0) devia avisar mesmo com sujo"),
         }
     }
 }

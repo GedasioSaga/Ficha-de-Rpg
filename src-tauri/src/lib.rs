@@ -1227,15 +1227,16 @@ fn open_in_memory_para_troca() -> Result<rusqlite::Connection, AppError> {
     db::connection::open_in_memory()
 }
 
-/// Sincronização de boot, sob demanda (Fase 3, docs/plans/2026-08-11-sync-google-drive.md
-/// §4 "Boot (automático)"; movida do `.setup()` pro frontend disparar depois
-/// do render — ver comentário no `setup()`). Mesmo faseamento de
-/// `sync_status`/`sync_enviar`/`sync_baixar`: lock BREVE só pra ler
-/// config/carimbo/sujo, rede sem lock nenhum (monta transporte + decide o
-/// plano + já baixa o pacote se for aplicar), lock BREVE de novo só pra
-/// trocar a conexão e aplicar o que já está em disco local
-/// (`aplicar_baixar_local`, reaproveitado de `sync_baixar` — mesma máquina de
-/// fechar/trocar/reabrir a conexão gerenciada).
+/// Verificação de boot: OLHA a nuvem e avisa, nunca move dado (mudança de
+/// 2026-08-11, pedido do usuário — "só sincroniza quando eu apertar enviar ou
+/// baixar"). Antes ela baixava o `.rpgpack` inteiro e trocava o banco sozinha
+/// quando o local estava limpo; agora o único I/O remoto é `ler_manifesto`
+/// (poucos KB), e quem baixa é o botão Baixar da tela Sincronização.
+///
+/// Continua fora do `.setup()` do Tauri (o frontend dispara depois do render,
+/// `SyncBootDriver`) — rede no `setup()` segura a janela fechada. E continua
+/// com o mesmo faseamento do resto: lock BREVE só pra ler config/carimbo/sujo,
+/// rede sem lock nenhum.
 ///
 /// Erro de rede/transporte indisponível não vira `Err` pra UI — devolve
 /// `EventoBootSync::Nenhum` e loga, igual o boot antigo dentro do `setup()`
@@ -1248,7 +1249,8 @@ fn sync_verificar_boot(
     google: tauri::State<EstadoGoogle>,
     cofre: tauri::State<segredos::CofreState>,
 ) -> Result<EventoBootSync, AppError> {
-    let (banco_destino, imagens_dir) = caminhos_banco(&app)?;
+    // `staging` não recebe mais pacote baixado — segue aqui só porque
+    // `montar_transporte_de` precisa de um diretório local pro transporte.
     let staging = diretorio_sync_tmp(&app)?;
 
     // Fase 1 — lock BREVE: só leitura do banco.
@@ -1260,26 +1262,16 @@ fn sync_verificar_boot(
         (tipo, pasta, carimbo, sujo)
     };
 
-    // Fase 2 — rede, SEM lock: acha transporte, decide o plano e, se for
-    // `Aplicar`, já baixa o `.rpgpack` pra um temp local — o banco vivo ainda
-    // nem foi tocado. `Conflito` não baixa nada: só devolve o contador pra UI
-    // decidir. Qualquer erro aqui (transporte indisponível, rede fora) vira
-    // `None` — nunca derruba o app.
+    // Fase 2 — rede, SEM lock: acha transporte e lê só o manifesto remoto.
+    // Qualquer erro aqui (transporte indisponível, rede fora) vira `None` —
+    // nunca derruba o app.
     std::fs::create_dir_all(&staging)?;
-    let temp_pacote = staging.join(format!("{}.baixado", sincronizacao_nuvem::NOME_PACOTE));
-    let resultado_fase2: Result<Option<Result<sincronizacao_nuvem::Manifesto, i64>>, AppError> =
+    let resultado_fase2: Result<Option<PlanoBoot>, AppError> =
         tauri::async_runtime::block_on(async {
             let Some(transporte) = montar_transporte_de(tipo, pasta, &staging, &google, &cofre).await? else {
                 return Ok(None);
             };
-            match sincronizacao_nuvem::planejar_boot(&carimbo, sujo, transporte.as_ref()).await? {
-                PlanoBoot::Nenhum => Ok(None),
-                PlanoBoot::Conflito(m) => Ok(Some(Err(m.contador))),
-                PlanoBoot::Aplicar(manifesto) => {
-                    transporte.baixar_pacote_para(&temp_pacote).await?;
-                    Ok(Some(Ok(manifesto)))
-                }
-            }
+            Ok(Some(sincronizacao_nuvem::planejar_boot(&carimbo, sujo, transporte.as_ref()).await?))
         });
     let plano = match resultado_fase2 {
         Ok(p) => p,
@@ -1289,31 +1281,20 @@ fn sync_verificar_boot(
         }
     };
 
-    let manifesto = match plano {
-        None => return Ok(EventoBootSync::Nenhum),
-        Some(Err(contador_nuvem)) => {
+    Ok(match plano {
+        None | Some(PlanoBoot::Nenhum) => EventoBootSync::Nenhum,
+        Some(PlanoBoot::NuvemMaisNova(m)) => {
+            eprintln!("[sync boot] nuvem v{} mais nova — avisando (nada foi baixado)", m.contador);
+            EventoBootSync::NuvemMaisNova { contador: m.contador }
+        }
+        Some(PlanoBoot::Conflito(m)) => {
             eprintln!(
-                "[sync boot] conflito: nuvem v{contador_nuvem} vs. local com mudanças não enviadas — aguardando decisão na UI"
+                "[sync boot] nuvem v{} mais nova E há mudanças locais não enviadas — avisando",
+                m.contador
             );
-            return Ok(EventoBootSync::ConflitoPendente { contador_nuvem });
+            EventoBootSync::ConflitoPendente { contador_nuvem: m.contador }
         }
-        Some(Ok(manifesto)) => manifesto,
-    };
-
-    // Fase 3 — lock BREVE: fecha a conexão viva, aplica o pacote JÁ BAIXADO
-    // (puramente local, sem `.await`), reabre e grava o carimbo.
-    let resultado = aplicar_baixar_local(&db, &temp_pacote, &banco_destino, &imagens_dir, &manifesto);
-    let _ = std::fs::remove_file(&temp_pacote);
-    match resultado {
-        Ok(_) => {
-            eprintln!("[sync boot] nuvem v{} aplicada automaticamente (local limpo)", manifesto.contador);
-            Ok(EventoBootSync::AplicadoAutomaticamente { contador: manifesto.contador })
-        }
-        Err(e) => {
-            eprintln!("[sync boot] falha ao aplicar automaticamente: {e}");
-            Ok(EventoBootSync::Nenhum)
-        }
-    }
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

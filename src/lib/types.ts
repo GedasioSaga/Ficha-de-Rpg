@@ -449,12 +449,13 @@ export interface SyncResultado {
 
 /**
  * Espelha `EventoBootSync` (Rust, `#[serde(tag = "tipo")]`) — devolvido por
- * `sync_evento_boot`, lido uma vez no primeiro render (Fase 3, ver
- * docs/plans/2026-08-10-sync-nuvem.md §"Fase 3 — Boot automático + conflito").
+ * `sync_verificar_boot`, lido uma vez no primeiro render. Desde 2026-08-11 o
+ * boot só OLHA a nuvem (lê o manifesto) e avisa; nenhuma variante significa
+ * "já baixei" — sincronizar é sempre um botão da tela Sincronização.
  */
 export type EventoBootSync =
   | { tipo: "nenhum" }
-  | { tipo: "aplicado_automaticamente"; contador: number }
+  | { tipo: "nuvem_mais_nova"; contador: number }
   | { tipo: "conflito_pendente"; contador_nuvem: number };
 
 /**

@@ -1,107 +1,86 @@
 import { useEffect, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { syncBaixar, syncVerificarBoot } from "../../lib/api";
-import { useToast } from "../../components/Toast";
+import { useNavigate } from "react-router-dom";
+import { syncVerificarBoot } from "../../lib/api";
 
 /**
- * Fica fora do `Outlet` (montado no `AppShell`), igual `CofreSenhaDialog` —
- * o evento do boot vale pro app inteiro, não pra uma rota. Dispara
- * `sync_verificar_boot` uma vez no mount: a sincronização de boot não roda
- * mais dentro do `.setup()` do Tauri (rede bloqueava a abertura da janela —
- * ver docs/plans/2026-08-11-sync-google-drive.md), então é este `useEffect`
- * que a dispara, em background, sem travar o render. Se a nuvem já aplicou
- * sozinha (nuvem mais nova + local limpo), só avisa com um toast e invalida
- * as queries pra UI recarregar com os dados sincronizados; se achou conflito
- * (nuvem mais nova + mudanças locais não enviadas), abre este diálogo — o
- * comando não tem UI pra decidir isso sozinho (Fase 3, ver
- * docs/plans/2026-08-10-sync-nuvem.md).
+ * Aviso de "a nuvem tem versão mais nova" — a ÚNICA coisa que o app faz de
+ * rede sozinho, uma vez por abertura, e mesmo assim só leitura do manifesto
+ * (poucos KB, ver `sync_verificar_boot` no Rust).
+ *
+ * Antes daqui saía sincronização de verdade: o boot baixava o `.rpgpack`
+ * inteiro e trocava o banco quando o local estava limpo, e um irmão
+ * (`AutoEnviarSync`) mandava o pacote pra nuvem 8s depois de qualquer edição.
+ * Os dois foram removidos em 2026-08-11 a pedido do usuário — o upload
+ * periódico travava o app no meio do uso. Agora nenhum byte de dado se move
+ * sem alguém apertar Enviar ou Baixar na tela Sincronização; este banner só
+ * aponta o caminho.
+ *
+ * Fica fora do `Outlet` (montado no `AppShell`), igual `CofreSenhaDialog` e
+ * `AtualizadorBanner` — o evento do boot vale pro app inteiro, não pra uma
+ * rota. Discreto e não-bloqueante de propósito: o usuário pode ignorar e
+ * continuar jogando; a decisão de sobrescrever é dele, na tela própria.
  */
 export default function SyncBootDriver() {
-  const qc = useQueryClient();
-  const toast = useToast();
-  const [conflito, setConflito] = useState<{ contadorNuvem: number } | null>(null);
-  const [baixando, setBaixando] = useState(false);
+  const navigate = useNavigate();
+  const [aviso, setAviso] = useState<{ contador: number; conflito: boolean } | null>(null);
 
   useEffect(() => {
     let cancelado = false;
     syncVerificarBoot()
       .then((evento) => {
         if (cancelado) return;
-        if (evento.tipo === "aplicado_automaticamente") {
-          toast.sucesso(`Sincronizado com a nuvem ao abrir (v${evento.contador}).`);
-          qc.invalidateQueries();
+        if (evento.tipo === "nuvem_mais_nova") {
+          setAviso({ contador: evento.contador, conflito: false });
         } else if (evento.tipo === "conflito_pendente") {
-          setConflito({ contadorNuvem: evento.contador_nuvem });
+          setAviso({ contador: evento.contador_nuvem, conflito: true });
         }
       })
-      .catch((e) => toast.erro(String(e)));
+      // Nuvem fora do ar / cofre trancado / sem transporte configurado não é
+      // erro pro usuário: sem aviso, app segue normal (mesmo silêncio do
+      // `AtualizadorBanner`).
+      .catch(() => {});
     return () => {
       cancelado = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- roda só uma vez, no mount
   }, []);
 
-  async function baixarPerdendoLocais() {
-    setBaixando(true);
-    try {
-      const r = await syncBaixar(true);
-      qc.invalidateQueries();
-      if (r.sucesso) toast.sucesso(r.mensagem);
-      else toast.erro(r.mensagem);
-    } catch (e) {
-      toast.erro(String(e));
-    } finally {
-      setBaixando(false);
-      setConflito(null);
-    }
-  }
-
-  function manterLocais() {
-    setConflito(null);
-    toast.sucesso("Mantendo suas mudanças locais — lembre de Enviar na tela Sincronização.");
-  }
-
-  if (!conflito) return null;
+  if (!aviso) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm" />
-      <div className="relative w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-2xl">
-        <h2 className="text-base font-semibold tracking-tight text-slate-100">
-          Conflito de sincronização
-        </h2>
-        <p className="mt-2 text-sm leading-relaxed text-slate-400">
-          A nuvem tem uma versão mais nova (v{conflito.contadorNuvem}), mas este computador
-          tem mudanças que ainda não foram enviadas. O que você quer fazer?
-        </p>
-
-        <div className="mt-5 flex flex-col gap-2">
-          <button
-            type="button"
-            disabled={baixando}
-            onClick={baixarPerdendoLocais}
-            className="h-9 rounded-lg bg-rose-600 px-3.5 text-sm font-semibold text-white transition-colors hover:bg-rose-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/40 disabled:opacity-50"
-          >
-            {baixando ? "Baixando…" : "Baixar da nuvem (perde as mudanças locais, com backup)"}
-          </button>
-          <button
-            type="button"
-            disabled={baixando}
-            onClick={manterLocais}
-            className="h-9 rounded-lg border border-slate-700 px-3.5 text-sm font-medium text-slate-300 transition-colors hover:bg-slate-800 disabled:opacity-50"
-          >
-            Manter minhas mudanças locais
-          </button>
-          <button
-            type="button"
-            disabled={baixando}
-            onClick={() => setConflito(null)}
-            className="h-9 rounded-lg px-3.5 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-800 disabled:opacity-50"
-          >
-            Cancelar (decidir depois)
-          </button>
-        </div>
-      </div>
+    <div
+      role="status"
+      className={`fixed left-1/2 top-4 z-40 flex -translate-x-1/2 items-center gap-3 rounded-xl border bg-slate-900/95 px-4 py-2.5 shadow-2xl backdrop-blur ${
+        aviso.conflito ? "border-rose-500/40" : "border-amber-500/40"
+      }`}
+    >
+      <span className="text-sm text-slate-200">
+        A nuvem tem a versão{" "}
+        <span className={`font-semibold ${aviso.conflito ? "text-rose-300" : "text-amber-300"}`}>
+          v{aviso.contador}
+        </span>
+        {aviso.conflito
+          ? " — e este PC tem mudanças ainda não enviadas."
+          : " — este PC está atrás."}
+      </span>
+      <button
+        type="button"
+        onClick={() => {
+          setAviso(null);
+          navigate("/sync");
+        }}
+        className="h-8 shrink-0 rounded-lg bg-indigo-500 px-3 text-sm font-semibold text-white transition-colors hover:bg-indigo-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40"
+      >
+        Abrir Sincronização
+      </button>
+      <button
+        type="button"
+        onClick={() => setAviso(null)}
+        aria-label="Dispensar aviso de sincronização"
+        className="grid size-7 shrink-0 place-items-center rounded-md text-slate-500 transition-colors hover:bg-slate-800 hover:text-slate-200"
+      >
+        ✕
+      </button>
     </div>
   );
 }
