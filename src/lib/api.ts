@@ -182,6 +182,10 @@ export const batalhaModificadorManual = (
   deltas: [AtributoNome, number][],
 ) => invoke<EstadoBatalha>("batalha_modificador_manual", { id, deltas });
 
+/** Nível de concentração (marcador visual, 0..=3) de um combatente. */
+export const batalhaConcentracao = (id: number, nivel: number) =>
+  invoke<EstadoBatalha>("batalha_concentracao", { id, nivel });
+
 /** Rank (0..=13) de um atributo para um valor efetivo (base + mods). */
 export const calcularRank = (atributo: AtributoNome, valor: number) =>
   invoke<number>("calcular_rank", { atributo, valor });
@@ -203,6 +207,10 @@ export const batalhaMoverPeca = (id: number, linha: number, coluna: number) =>
 /** Remove a peça do mapa (o combatente volta pra fora do grid). */
 export const batalhaRemoverPeca = (id: number) =>
   invoke<EstadoBatalha>("batalha_remover_peca", { id });
+
+/** Define (ou remove, com `simbolo` vazio) a anotação ao vivo de uma célula do mapa. */
+export const batalhaAnotarMapa = (linha: number, coluna: number, simbolo: string) =>
+  invoke<EstadoBatalha>("batalha_anotar_mapa", { linha, coluna, simbolo });
 
 /* ----------------------------------- Mapa ---------------------------------- */
 /** Lista os mapas (resumo) pra biblioteca lateral. */

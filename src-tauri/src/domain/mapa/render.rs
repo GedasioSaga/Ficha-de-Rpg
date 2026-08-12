@@ -118,7 +118,15 @@ fn turno_atual(pecas: &[PecaRender]) -> Option<String> {
 /// `pecas` = peças 0-indexadas; cada uma sobrepõe o char de terreno da célula
 /// que ocupa. Lista vazia = só terreno (comportamento antigo). O glifo não
 /// muda o tamanho da grade, então o guard [`excede_discord`] segue valendo.
-pub fn render_discord(m: &Mapa, pecas: &[PecaRender]) -> String {
+///
+/// `anotacoes` = marcações ao vivo do mestre (camada da batalha, `(linha,
+/// coluna, símbolo)` 0-indexadas — cada símbolo é sempre 1 caractere). Tuplas
+/// em vez do tipo `Anotacao` de `domain::batalha` de propósito: `domain::mapa`
+/// não depende de `domain::batalha` (é o inverso — `pecas.rs` importa
+/// `PecaRender` daqui), e criar essa dependência só pra passar um símbolo
+/// entortaria a direção do módulo. Precedência na célula: peça > anotação >
+/// terreno.
+pub fn render_discord(m: &Mapa, pecas: &[PecaRender], anotacoes: &[(u16, u16, String)]) -> String {
     let mut out = String::new();
 
     if !m.titulo.trim().is_empty() {
@@ -154,7 +162,11 @@ pub fn render_discord(m: &Mapa, pecas: &[PecaRender]) -> String {
                 .iter()
                 .find(|p| p.linha as usize == i && p.coluna as usize == c)
                 .map(|p| p.glifo);
-            out.push(glifo.unwrap_or(terreno));
+            let anotacao = anotacoes
+                .iter()
+                .find(|(l, co, _)| *l as usize == i && *co as usize == c)
+                .and_then(|(_, _, simbolo)| simbolo.chars().next());
+            out.push(glifo.or(anotacao).unwrap_or(terreno));
             if c + 1 < m.colunas as usize {
                 out.push(' ');
             }
@@ -231,7 +243,7 @@ mod tests {
         // texto livre do mestre entra logo depois, complementando.
         let m = mapa("Teste", 3, 2, &["-XX", "X--"], "vale do norte", "");
         let esperado = "**Teste**\n\n```\n  A B C\n1 - X X\n2 X - -\n```\n\n**Legenda:** X = árvore · vale do norte";
-        assert_eq!(render_discord(&m, &[]), esperado);
+        assert_eq!(render_discord(&m, &[], &[]), esperado);
     }
 
     fn peca(linha: u16, coluna: u16, glifo: char, nome: &str, eh_turno: bool) -> PecaRender {
@@ -242,7 +254,7 @@ mod tests {
     fn pecas_sobrepoem_glifo_na_celula_e_geram_bloco_ordem() {
         let m = mapa("", 3, 2, &["---", "---"], "", "");
         // peça '1' em (linha 0, coluna 2) e '2' em (linha 1, coluna 0).
-        let out = render_discord(&m, &[peca(0, 2, '1', "Barril", false), peca(1, 0, '2', "Ryoko", false)]);
+        let out = render_discord(&m, &[peca(0, 2, '1', "Barril", false), peca(1, 0, '2', "Ryoko", false)], &[]);
         let esperado = "```\n  A B C\n1 - - 1\n2 2 - -\n```\n\n**Ordem:** 1 Barril · 2 Ryoko";
         assert_eq!(out, esperado);
     }
@@ -253,7 +265,7 @@ mod tests {
         // "X" vira "X - -" (pad), linha vazia vira "- - -"; a legenda automática
         // entra porque o desenho usa 'X'.
         let esperado = "```\n  A B C\n1 X - -\n2 - - -\n```\n\n**Legenda:** X = árvore";
-        assert_eq!(render_discord(&m, &[]), esperado);
+        assert_eq!(render_discord(&m, &[], &[]), esperado);
     }
 
     #[test]
@@ -264,7 +276,7 @@ mod tests {
         }
         let refs: Vec<&str> = grade.iter().map(String::as_str).collect();
         let m = mapa("", 6, 10, &refs, "", "");
-        let out = render_discord(&m, &[]);
+        let out = render_discord(&m, &[], &[]);
         // largura_rotulo = 2 → cabeçalho começa com 3 espaços; linha 1 com " 1"
         assert!(out.starts_with("```\n   A B C D E F\n 1 "));
         assert!(out.contains("\n10 "));
@@ -279,7 +291,7 @@ mod tests {
         let grade: Vec<String> = std::iter::repeat(linha).take(50).collect();
         let refs: Vec<&str> = grade.iter().map(String::as_str).collect();
         let m = mapa("Grande", 26, 50, &refs, "", "");
-        assert!(excede_discord(&render_discord(&m, &[])));
+        assert!(excede_discord(&render_discord(&m, &[], &[])));
     }
 
     #[test]
@@ -288,7 +300,7 @@ mod tests {
         // livre → só a grade, sem rótulo órfão nenhum.
         let m = mapa("Teste", 3, 2, &["---", "---"], "", "");
         let esperado = "**Teste**\n\n```\n  A B C\n1 - - -\n2 - - -\n```";
-        assert_eq!(render_discord(&m, &[]), esperado);
+        assert_eq!(render_discord(&m, &[], &[]), esperado);
     }
 
     #[test]
@@ -298,7 +310,7 @@ mod tests {
         let m = mapa("Teste", 3, 2, &["-XX", "X--"], "", "noite");
         let esperado =
             "**Teste**\n\n```\n  A B C\n1 - X X\n2 X - -\n```\n\n**Legenda:** X = árvore\n**Efeito do Campo:** noite";
-        assert_eq!(render_discord(&m, &[]), esperado);
+        assert_eq!(render_discord(&m, &[], &[]), esperado);
     }
 
     #[test]
@@ -306,7 +318,7 @@ mod tests {
         // Usa água, pedra e fogo — e NÃO árvore. A ordem segue a tabela
         // `TERRENOS`, não a ordem em que aparecem no desenho.
         let m = mapa("", 3, 2, &["*#~", "---"], "", "");
-        let out = render_discord(&m, &[]);
+        let out = render_discord(&m, &[], &[]);
         assert!(out.contains("**Legenda:** # = pedra · ~ = água · * = fogo/perigo"), "saiu: {out}");
         assert!(!out.contains("árvore"));
     }
@@ -316,7 +328,7 @@ mod tests {
         // '-' não significa nada e 'K' é ponto de interesse (o mestre explica no
         // texto livre) — nenhum dos dois entra na legenda automática.
         let m = mapa("", 3, 2, &["--K", "---"], "K = tesouro", "");
-        let out = render_discord(&m, &[]);
+        let out = render_discord(&m, &[], &[]);
         assert_eq!(out, "```\n  A B C\n1 - - K\n2 - - -\n```\n\n**Legenda:** K = tesouro");
     }
 
@@ -329,7 +341,7 @@ mod tests {
             peca(0, 0, '1', "Barril", false),
             peca(0, 1, '2', "Ryoko", false),
         ];
-        let out = render_discord(&m, &pecas);
+        let out = render_discord(&m, &pecas, &[]);
         assert!(out.ends_with("**Ordem:** 1 Barril · 2 Ryoko · 3 Bariarte"));
     }
 
@@ -341,7 +353,7 @@ mod tests {
             peca(0, 1, '2', "Ryoko", false),
             peca(0, 2, '3', "Bariarte", true),
         ];
-        let out = render_discord(&m, &pecas);
+        let out = render_discord(&m, &pecas, &[]);
         assert!(out.ends_with("**Ordem:** 1 Barril · 2 Ryoko · 3 Bariarte\n**Turno Atual:** Bariarte (3)"));
     }
 
@@ -351,8 +363,22 @@ mod tests {
         // nome com acentos propositalmente maior que o teto de 14 chars —
         // truncar por byte entraria em pânico ou cortaria o "é" ao meio.
         let pecas = [peca(0, 0, '1', "Ryoko D. Violeta Marinheiro", false)];
-        let out = render_discord(&m, &pecas);
+        let out = render_discord(&m, &pecas, &[]);
         assert!(out.ends_with("**Ordem:** 1 Ryoko D. Viole…"));
         assert_eq!("Ryoko D. Viole".chars().count(), NOME_LEGENDA_MAX_CHARS);
+    }
+
+    #[test]
+    fn anotacao_sobrepoe_terreno_mas_peca_sobrepoe_anotacao() {
+        let m = mapa("", 3, 1, &["XXX"], "", "");
+        let anotacoes = vec![(0u16, 0u16, "*".to_string()), (0u16, 1u16, "_".to_string())];
+        // sem peça: anotação vence o terreno 'X' nas duas primeiras células.
+        let out = render_discord(&m, &[], &anotacoes);
+        assert!(out.contains("1 * _ X"), "saiu: {out}");
+
+        // peça em (0,0) sobrepõe a anotação; (0,1) continua mostrando a anotação.
+        let pecas = [peca(0, 0, '1', "Barril", false)];
+        let out = render_discord(&m, &pecas, &anotacoes);
+        assert!(out.contains("1 1 _ X"), "saiu: {out}");
     }
 }

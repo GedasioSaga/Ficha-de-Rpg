@@ -2145,6 +2145,7 @@ mod tests_batalha_ativa {
             }],
             turnos_extras: 1,
             posicao: Some((2, 5)),
+            concentracao: 0,
         };
         Estado {
             combatentes: vec![combatente],
@@ -2154,6 +2155,7 @@ mod tests_batalha_ativa {
             indice_turno: 1,
             historico: Vec::new(),
             mapa_id: Some(7),
+            anotacoes: Vec::new(),
         }
     }
 
@@ -2232,6 +2234,7 @@ mod tests_batalha_preset {
             efeitos_recorrentes: Vec::new(),
             turnos_extras: 0,
             posicao: None,
+            concentracao: 0,
         }
     }
 
@@ -2244,6 +2247,7 @@ mod tests_batalha_preset {
             indice_turno: 0,
             historico: Vec::new(),
             mapa_id: None,
+            anotacoes: Vec::new(),
         }
     }
 

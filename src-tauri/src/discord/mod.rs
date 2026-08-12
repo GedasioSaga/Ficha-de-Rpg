@@ -306,7 +306,8 @@ pub async fn discord_postar_mapa(
 ) -> Result<String, AppError> {
     let canal_id = canal_da_sessao(estado.inner())?;
     let pecas = bat.pecas_para_mapa(mapa_id);
-    let texto = renderizar_para_discord(input, &pecas)?;
+    let anotacoes = bat.anotacoes_para_mapa(mapa_id);
+    let texto = renderizar_para_discord(input, &pecas, &anotacoes)?;
     let data = chamar(
         estado.inner(),
         "postar_mapa",
@@ -386,12 +387,13 @@ pub async fn discord_atualizar_mapa(
         let Some((canal_id, msg_id)) = sessao_com_mensagem(estado.inner())? else { break };
 
         let pecas = bat.pecas_para_mapa(mapa_id);
+        let anotacoes = bat.anotacoes_para_mapa(mapa_id);
         // Falha aqui NÃO pode ser só `eprintln!`: este laço roda sozinho, sem
         // ninguém olhando, e o `Ok(())` do comando faz o `.catch()` do driver no
         // front nunca disparar. Sem avisar, o mapa no Discord simplesmente
         // congela no meio da sessão (o caso mais provável é a mensagem passar de
         // 2000 chars) e o mestre só descobre muito depois. Daí o evento próprio.
-        let texto = match renderizar_para_discord(input, &pecas) {
+        let texto = match renderizar_para_discord(input, &pecas, &anotacoes) {
             Ok(t) => t,
             Err(e) => {
                 avisar_falha_sync(&app, &e.to_string());
@@ -695,8 +697,12 @@ fn mapa_provisorio(input: MapaInput) -> Mapa {
 
 /// Renderiza pro formato Discord com o guard de tamanho — Discord corta
 /// mensagens acima de `LIMITE_DISCORD` chars; melhor falhar legível do que postar cortado.
-fn renderizar_para_discord(input: MapaInput, pecas: &[PecaRender]) -> Result<String, AppError> {
-    let texto = render_discord(&mapa_provisorio(input), pecas);
+fn renderizar_para_discord(
+    input: MapaInput,
+    pecas: &[PecaRender],
+    anotacoes: &[(u16, u16, String)],
+) -> Result<String, AppError> {
+    let texto = render_discord(&mapa_provisorio(input), pecas, anotacoes);
     if excede_discord(&texto) {
         return Err(AppError::Msg(format!(
             "mapa tem {} caracteres — passa do limite de {LIMITE_DISCORD} do Discord, reduza antes de postar",

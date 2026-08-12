@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getPersonagem, retratoDataUrl } from "../../lib/api";
+import { getPersonagem, retratoDataUrl, batalhaConcentracao } from "../../lib/api";
 import type { Combatente, EstadoBatalha, PoolNome } from "../../lib/types";
 import { IconBatalha } from "../../components/icons";
 import { gradienteDoNome, iniciais } from "../characters/retrato";
@@ -105,13 +105,27 @@ export default function PerfilCombatente({ combatente: c, roda }: Props) {
       <div>
         <div className="mb-1.5 flex items-center justify-between">
           <h3 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Vitais</h3>
-          <button
-            type="button"
-            onClick={() => setCalcAberta(true)}
-            className="rounded-md border border-rose-900/60 bg-rose-950/40 px-2 py-1 text-[11px] font-medium text-rose-300 outline-none transition-colors duration-150 ease-out hover:bg-rose-900/40 focus-visible:ring-2 focus-visible:ring-indigo-500"
-          >
-            🧮 Calculadora de dano
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => roda(() => batalhaConcentracao(c.id, (c.concentracao + 1) % 4))}
+              title="Marcador de concentração (só visual). Clique pra ciclar X1 → X2 → X3 → neutro."
+              className={
+                c.concentracao > 0
+                  ? "rounded-md border border-violet-500/60 bg-violet-600/30 px-2 py-1 text-[11px] font-semibold text-violet-200 outline-none transition-colors duration-150 ease-out hover:bg-violet-600/40 focus-visible:ring-2 focus-visible:ring-indigo-500"
+                  : "rounded-md border border-violet-900/60 bg-violet-950/40 px-2 py-1 text-[11px] font-medium text-violet-300 outline-none transition-colors duration-150 ease-out hover:bg-violet-900/40 focus-visible:ring-2 focus-visible:ring-indigo-500"
+              }
+            >
+              🧠 Concentração{c.concentracao > 0 ? ` X${c.concentracao}` : ""}
+            </button>
+            <button
+              type="button"
+              onClick={() => setCalcAberta(true)}
+              className="rounded-md border border-rose-900/60 bg-rose-950/40 px-2 py-1 text-[11px] font-medium text-rose-300 outline-none transition-colors duration-150 ease-out hover:bg-rose-900/40 focus-visible:ring-2 focus-visible:ring-indigo-500"
+            >
+              🧮 Calculadora de dano
+            </button>
+          </div>
         </div>
         <div className="grid grid-cols-3 gap-2">
           {POOLS.map((p) => (

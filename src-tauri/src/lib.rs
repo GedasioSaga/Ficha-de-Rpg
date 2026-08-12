@@ -62,6 +62,29 @@ impl EstadoBatalha {
             Vec::new()
         }
     }
+
+    /// Anotações ao vivo (camada da batalha) do mapa, mesma regra de
+    /// [`pecas_para_mapa`]: só quando `mapa_id` é o mapa ATIVO da batalha.
+    /// Tuplas `(linha, coluna, símbolo)` — formato que `render_discord` espera,
+    /// pra não fazer `domain::mapa` depender de `domain::batalha`.
+    pub(crate) fn anotacoes_para_mapa(&self, mapa_id: Option<i64>) -> Vec<(u16, u16, String)> {
+        let Some(pedido) = mapa_id else {
+            return Vec::new();
+        };
+        let Ok(b) = self.0.lock() else {
+            return Vec::new();
+        };
+        let estado = b.estado();
+        if estado.mapa_id == Some(pedido) {
+            estado
+                .anotacoes
+                .iter()
+                .map(|a| (a.linha, a.coluna, a.simbolo.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
 }
 
 /// Ponto único de gravação da batalha: todo comando que MUTA o estado passa
@@ -646,6 +669,21 @@ fn batalha_modificador_manual(
     Ok(persistir_e_devolver(db.inner(), &b))
 }
 
+/// Define o nível de concentração (marcador visual do mestre, 0..=3) de um
+/// combatente. O botão no cockpit cicla `(atual + 1) % 4`; o clamp fica no
+/// domínio (`definir_concentracao`).
+#[tauri::command]
+fn batalha_concentracao(
+    db: tauri::State<Db>,
+    bat: tauri::State<EstadoBatalha>,
+    id: u32,
+    nivel: u8,
+) -> Result<Estado, AppError> {
+    let mut b = bat.0.lock().map_err(|e| AppError::Msg(e.to_string()))?;
+    b.definir_concentracao(id, nivel)?;
+    Ok(persistir_e_devolver(db.inner(), &b))
+}
+
 /// Rank (0..=13) de um atributo para um valor efetivo — usado pelo perfil da batalha ao vivo.
 #[tauri::command]
 fn calcular_rank(atributo: String, valor: i64) -> u8 {
@@ -831,6 +869,7 @@ fn render_mapa_discord(
     mapa_id: Option<i64>,
 ) -> String {
     let pecas = bat.pecas_para_mapa(mapa_id);
+    let anotacoes = bat.anotacoes_para_mapa(mapa_id);
     let input = normalizar(input);
     let m = Mapa {
         id: 0,
@@ -843,7 +882,22 @@ fn render_mapa_discord(
         criado_em: String::new(),
         atualizado_em: String::new(),
     };
-    render_discord(&m, &pecas)
+    render_discord(&m, &pecas, &anotacoes)
+}
+
+/// Define (ou remove, com `simbolo` vazio) a anotação ao vivo de uma célula do
+/// mapa — camada da batalha (overlay), não edita o mapa permanente.
+#[tauri::command]
+fn batalha_anotar_mapa(
+    db: tauri::State<Db>,
+    bat: tauri::State<EstadoBatalha>,
+    linha: u16,
+    coluna: u16,
+    simbolo: String,
+) -> Result<Estado, AppError> {
+    let mut b = bat.0.lock().map_err(|e| AppError::Msg(e.to_string()))?;
+    b.definir_anotacao(linha, coluna, simbolo)?;
+    Ok(persistir_e_devolver(db.inner(), &b))
 }
 
 // ---------- Nota ----------
@@ -1475,10 +1529,12 @@ pub fn run() {
             batalha_alternar_modo_ordem,
             batalha_definir_ordem,
             batalha_modificador_manual,
+            batalha_concentracao,
             batalha_definir_mapa,
             batalha_posicionar_peca,
             batalha_mover_peca,
             batalha_remover_peca,
+            batalha_anotar_mapa,
             batalha_adicionar_efeito_recorrente,
             batalha_limpar_efeitos_recorrentes,
             batalha_calculadora_dano,

@@ -103,6 +103,7 @@ mod tests {
             efeitos_recorrentes: Vec::new(),
             turnos_extras: 0,
             posicao,
+            concentracao: 0,
         }
     }
 
@@ -197,6 +198,7 @@ mod tests {
             indice_turno: 0,
             historico: Vec::new(),
             mapa_id: Some(7),
+            anotacoes: Vec::new(),
         };
         let mut pecas = pecas_para_render(&estado);
         pecas.sort_by_key(|p| p.glifo);
@@ -221,6 +223,7 @@ mod tests {
             indice_turno: 1, // 2º slot expandido ainda é do 10
             historico: Vec::new(),
             mapa_id: Some(7),
+            anotacoes: Vec::new(),
         };
         let pecas = pecas_para_render(&estado);
         assert!(pecas.iter().find(|p| p.glifo == '1').unwrap().eh_turno);

@@ -156,6 +156,16 @@ pub struct EfeitoRecorrente {
     pub duracao: u8,
 }
 
+/// Anotação ao vivo numa célula do mapa (camada da batalha, não edita o mapa
+/// permanente). `simbolo` é sempre exatamente 1 caractere — normalizado em
+/// [`super::Batalha::definir_anotacao`]. 1 anotação por célula.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Anotacao {
+    pub linha: u16,
+    pub coluna: u16,
+    pub simbolo: String,
+}
+
 /// Identificador sintético de um combatente na arena (próprio da batalha, não do DB).
 pub type CombatenteId = u32;
 
@@ -181,6 +191,11 @@ pub struct Combatente {
     /// `None` = combatente ainda não colocado no mapa. Definida via comando
     /// (drag/mover), nunca pela [`EntradaCombatente`].
     pub posicao: Option<(u16, u16)>,
+    /// Nível de concentração (marcador do mestre): 0 = neutro, 1..=3 = X1/X2/X3.
+    /// Só rótulo visual, sem efeito mecânico. `#[serde(default)]` deixa
+    /// snapshots de batalha antigos (sem o campo) abrirem como 0.
+    #[serde(default)]
+    pub concentracao: u8,
 }
 
 impl Combatente {

@@ -8,6 +8,7 @@ import {
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  batalhaAnotarMapa,
   batalhaDefinirMapa,
   batalhaEstado,
   batalhaMoverPeca,
@@ -63,6 +64,12 @@ export default function MapaFaixa() {
   // ~16px de largura: sem destaque, mirar é adivinhação, e soltar um pixel fora
   // cai na linha (que não recebe drop) e parece que "não funcionou".
   const [celulaAlvo, setCelulaAlvo] = useState<string | null>(null);
+  // Célula em edição de anotação ("linha:coluna") + valor do input controlado.
+  const [editando, setEditando] = useState<string | null>(null);
+  const [valorEditando, setValorEditando] = useState("");
+  // Escape fecha o input sem gravar; sem essa flag, o `onBlur` disparado pela
+  // remoção do input do DOM salvaria mesmo assim.
+  const cancelandoRef = useRef(false);
 
   const mapaId = idDeMapa(estado?.mapa_id);
   const semMapas = mapas !== undefined && mapas.length === 0;
@@ -119,6 +126,11 @@ export default function MapaFaixa() {
     if (c.posicao) pecaPorCelula.set(`${c.posicao[0]}:${c.posicao[1]}`, c);
   }
 
+  const anotacaoPorCelula = new Map<string, string>();
+  for (const a of estado?.anotacoes ?? []) {
+    anotacaoPorCelula.set(`${a.linha}:${a.coluna}`, a.simbolo);
+  }
+
   const pecaSelecionada = combatentes.find((c) => c.id === selId && c.posicao) ?? null;
 
   // Lê o id AQUI, síncrono. `roda(...)` só roda a ação num microtask seguinte, e até
@@ -131,12 +143,45 @@ export default function MapaFaixa() {
   }
 
   function aoClicarCelula(linha: number, coluna: number) {
-    const peca = pecaPorCelula.get(`${linha}:${coluna}`);
+    const chave = `${linha}:${coluna}`;
+    const peca = pecaPorCelula.get(chave);
     if (peca) {
       setSelId((atual) => (atual === peca.id ? null : peca.id));
+      setEditando(null);
       return;
     }
-    if (selId !== null) roda(() => batalhaMoverPeca(selId, linha, coluna));
+    if (selId !== null) {
+      roda(() => batalhaMoverPeca(selId, linha, coluna));
+      return;
+    }
+    // Célula vazia, nenhuma peça selecionada: clica e digita — entra em edição
+    // da anotação daquela célula, pré-preenchida com o símbolo atual (se houver).
+    setEditando(chave);
+    setValorEditando(anotacaoPorCelula.get(chave) ?? "");
+  }
+
+  function confirmarAnotacao(linha: number, coluna: number) {
+    roda(() => batalhaAnotarMapa(linha, coluna, valorEditando));
+    setEditando(null);
+  }
+
+  function aoTeclarAnotacao(e: KeyboardEvent<HTMLInputElement>, linha: number, coluna: number) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      confirmarAnotacao(linha, coluna);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancelandoRef.current = true;
+      setEditando(null);
+    }
+  }
+
+  function aoDesfocarAnotacao(linha: number, coluna: number) {
+    if (cancelandoRef.current) {
+      cancelandoRef.current = false;
+      return;
+    }
+    confirmarAnotacao(linha, coluna);
   }
 
   function aoSoltar(e: DragEvent, linha: number, coluna: number) {
@@ -239,9 +284,13 @@ export default function MapaFaixa() {
                   <span className="w-5 pr-1 text-right text-slate-500">{r + 1}</span>
                   {Array.from({ length: mapa.colunas }, (_, c) => {
                     const ch = [...linha][c] ?? "-";
-                    const peca = pecaPorCelula.get(`${r}:${c}`);
+                    const chave = `${r}:${c}`;
+                    const peca = pecaPorCelula.get(chave);
+                    // precedência: peça > anotação > terreno.
+                    const anotacao = peca ? undefined : anotacaoPorCelula.get(chave);
                     const selecionada = peca != null && peca.id === selId;
                     const idx = peca ? indicePorId.get(peca.id) : undefined;
+                    const estaEditando = editando === chave;
                     return (
                       <span
                         key={c}
@@ -255,7 +304,11 @@ export default function MapaFaixa() {
                         onDrop={(e) => aoSoltar(e, r, c)}
                         title={peca ? peca.nome : undefined}
                         className={`w-4 cursor-pointer text-center ${
-                          peca ? `font-bold ${corDoGlifo(peca.tipo)}` : corDaCelula(ch, cores)
+                          peca
+                            ? `font-bold ${corDoGlifo(peca.tipo)}`
+                            : anotacao
+                              ? "font-semibold text-amber-200"
+                              : corDaCelula(ch, cores)
                         } ${
                           celulaAlvo === `${r}:${c}`
                             ? "rounded-sm bg-emerald-500/40 ring-1 ring-inset ring-emerald-300"
@@ -264,7 +317,26 @@ export default function MapaFaixa() {
                               : ""
                         }`}
                       >
-                        {peca ? (idx !== undefined ? glifoOrdem(idx) : "?") : ch}
+                        {estaEditando ? (
+                          <input
+                            autoFocus
+                            maxLength={1}
+                            value={valorEditando}
+                            onChange={(e) => setValorEditando(e.target.value)}
+                            onKeyDown={(e) => aoTeclarAnotacao(e, r, c)}
+                            onBlur={() => aoDesfocarAnotacao(r, c)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-4 bg-transparent text-center text-amber-200 outline-none"
+                          />
+                        ) : peca ? (
+                          idx !== undefined ? (
+                            glifoOrdem(idx)
+                          ) : (
+                            "?"
+                          )
+                        ) : (
+                          (anotacao ?? ch)
+                        )}
                       </span>
                     );
                   })}
@@ -273,8 +345,8 @@ export default function MapaFaixa() {
             </div>
           </div>
           <p className="mt-2 text-[11px] text-slate-600">
-            Arraste do roster pra colocar · clique numa peça e depois numa célula pra mover · Delete
-            tira do mapa.
+            Arraste do roster pra colocar · clique numa peça e depois numa célula pra mover · clique
+            numa célula vazia pra colocar um símbolo · Delete tira do mapa.
           </p>
         </>
       ) : mapaErro ? (

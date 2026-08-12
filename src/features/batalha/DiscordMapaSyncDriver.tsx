@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { batalhaEstado, discordAtualizarMapa, getMapa } from "../../lib/api";
 import { mapaParaInput } from "../mapa/logica";
 import { useToast } from "../../components/Toast";
-import { assinaturaPecas, resetarSyncMapa, useSyncMapa } from "./syncMapaDiscord";
+import { assinaturaMapaSync, resetarSyncMapa, useSyncMapa } from "./syncMapaDiscord";
 
 /** Poll do mapa (terreno) enquanto o sync ao vivo está ligado. */
 const POLL_SYNC_MS = 1500;
@@ -70,8 +70,9 @@ export default function DiscordMapaSyncDriver() {
     }
   }, [mapaId]);
 
-  // Assinatura combinada = terreno (timestamp) + peças (glifo@célula, ordenado).
-  const assinatura = `${mapaAtual?.atualizado_em ?? ""}|${estado ? assinaturaPecas(estado) : ""}`;
+  // Assinatura combinada = terreno (timestamp) + TUDO do estado que o render
+  // mostra (peças, anotações, turno/rodada/ordem). Ver `assinaturaMapaSync`.
+  const assinatura = `${mapaAtual?.atualizado_em ?? ""}|${estado ? assinaturaMapaSync(estado) : ""}`;
   const ultimaAssinaturaRef = useRef<string | null>(null);
 
   // Ao LIGAR o sync, ancora na assinatura atual: o "Postar" já mandou este estado,

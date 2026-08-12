@@ -290,10 +290,22 @@ export interface Combatente {
   turnos_extras: number;
   /** Posição no mapa ativo (0-indexed [linha, coluna]); null = fora do mapa (Fase 3). */
   posicao: [number, number] | null;
+  /** Nível de concentração (marcador do mestre): 0 = neutro, 1..3 = X1/X2/X3. Só visual. */
+  concentracao: number;
 }
 
 /** Um evento do log da batalha (opaco no B2 Fatia 1 — só o tipo/registro importa). */
 export type EventoBatalha = Record<string, unknown>;
+
+/**
+ * Anotação ao vivo numa célula do mapa (camada da batalha, overlay — NÃO edita
+ * o mapa permanente). `simbolo` é sempre exatamente 1 caractere.
+ */
+export interface Anotacao {
+  linha: number;
+  coluna: number;
+  simbolo: string;
+}
 
 /** Estado da batalha ativa. Espelha `Estado` do Rust. */
 export interface EstadoBatalha {
@@ -305,6 +317,8 @@ export interface EstadoBatalha {
   historico: EventoBatalha[];
   /** Mapa ativo da batalha (fonte única do cockpit/Discord); null = nenhum (Fase 3). */
   mapa_id: number | null;
+  /** Anotações ao vivo no mapa ativo (camada da batalha). */
+  anotacoes: Anotacao[];
 }
 
 /* ----------------------------------- Mapa ---------------------------------- */

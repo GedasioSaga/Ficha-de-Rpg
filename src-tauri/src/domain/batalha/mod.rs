@@ -22,7 +22,7 @@ mod regras;
 pub use dado::{Dado, DadoRoteirizado, DadoXorshift};
 pub use eventos::Evento;
 pub use modelos::{
-    Atributo, Combatente, CombatenteId, Cooldown, DanoDistribuido, EfeitoRecorrente,
+    Anotacao, Atributo, Combatente, CombatenteId, Cooldown, DanoDistribuido, EfeitoRecorrente,
     EntradaCombatente, Modificador, OrigemModificador, Pool, Pools, Tipo,
 };
 pub use pecas::pecas_para_render;
@@ -51,6 +51,11 @@ pub struct Estado {
     /// Mapa ativo da batalha (id da tabela `mapa`). Fonte única do cockpit e do
     /// sync do Discord. `None` = nenhum mapa selecionado.
     pub mapa_id: Option<i64>,
+    /// Anotações ao vivo no mapa (camada da batalha — NÃO edita o mapa
+    /// permanente). `#[serde(default)]` deixa batalhas salvas antes desta
+    /// feature abrirem como lista vazia, sem migration.
+    #[serde(default)]
+    pub anotacoes: Vec<Anotacao>,
 }
 
 impl Estado {
@@ -63,6 +68,7 @@ impl Estado {
             indice_turno: 0,
             historico: Vec::new(),
             mapa_id: None,
+            anotacoes: Vec::new(),
         }
     }
 }
@@ -237,6 +243,7 @@ impl Batalha {
             efeitos_recorrentes: Vec::new(),
             turnos_extras: entrada.turnos_extras,
             posicao: None,
+            concentracao: 0,
         };
         self.estado.combatentes.push(combatente);
         if self.estado.ordem_manual {
@@ -412,6 +419,18 @@ impl Batalha {
             id,
             origem: OrigemModificador::Status("Manual".to_string()),
         });
+        Ok(())
+    }
+
+    /// Define o nível de concentração de um combatente (marcador do mestre,
+    /// 0=neutro, 1..=3). Só rótulo visual — nenhum efeito em atributo/dano.
+    /// `nivel` é clampado em 0..=3 (o botão cicla `(atual + 1) % 4`).
+    pub fn definir_concentracao(&mut self, id: CombatenteId, nivel: u8) -> Result<(), AppError> {
+        self.exige(id)?;
+        self.iniciar_op();
+        if let Some(c) = self.combatente_mut(id) {
+            c.concentracao = nivel.min(3);
+        }
         Ok(())
     }
 
@@ -634,6 +653,7 @@ impl Batalha {
         self.estado.indice_turno = 0;
         self.estado.ordem_manual = false;
         self.estado.mapa_id = None;
+        self.estado.anotacoes.clear();
         self.estado.historico.push(Evento::Resetado);
     }
 
@@ -714,6 +734,23 @@ impl Batalha {
             if let Some(de) = de {
                 self.estado.historico.push(Evento::PecaRemovida { id, de });
             }
+        }
+        Ok(())
+    }
+
+    /// Define (ou remove) a anotação ao vivo de uma célula do mapa — camada da
+    /// batalha, não edita o mapa permanente. `simbolo` é normalizado pro
+    /// PRIMEIRO caractere não-vazio; vazio/só espaço REMOVE a anotação da
+    /// célula. 1 anotação por célula (a existente é substituída). Sem `exige`
+    /// (não é combatente). Nunca falha — `Result` só pra casar com o padrão
+    /// dos outros mutadores no comando Tauri.
+    pub fn definir_anotacao(&mut self, linha: u16, coluna: u16, simbolo: String) -> Result<(), AppError> {
+        self.iniciar_op();
+        self.estado
+            .anotacoes
+            .retain(|a| !(a.linha == linha && a.coluna == coluna));
+        if let Some(ch) = simbolo.trim().chars().next() {
+            self.estado.anotacoes.push(Anotacao { linha, coluna, simbolo: ch.to_string() });
         }
         Ok(())
     }

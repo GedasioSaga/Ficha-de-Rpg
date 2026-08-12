@@ -54,16 +54,31 @@ export function useSyncMapa(): EstadoSyncMapa {
 }
 
 /**
- * Assinatura das PEÇAS no mapa — exatamente o que o `render_discord` do backend
- * desenha: para cada combatente posicionado, o glifo (índice na ordem de
- * iniciativa) e a célula. Ordenada e juntada numa string comparável com `===`,
- * barata e estável mesmo se a ordem do array `combatentes` mudar. Inclui o índice
- * da `ordem` porque transformar/reordenar troca o glifo desenhado sem mover ninguém.
+ * Assinatura do mapa pro sync ao vivo — TUDO que o `render_discord` do backend
+ * desenha, pra detectar qualquer mudança que precise re-editar a mensagem no
+ * Discord. Comparável com `===`, barata, estável mesmo se a ordem do array
+ * `combatentes` mudar. Cobre:
+ *  - PEÇAS: glifo (índice na `ordem`) + célula — mover/posicionar/remover.
+ *  - ANOTAÇÕES: símbolo por célula — colocar/tirar marca ao vivo.
+ *  - TURNO: `rodada` + `indice_turno` + `ordem` + `turnos_extras` — passar o
+ *    turno muda o "Turno Atual"/"Ordem" da legenda sem mover ninguém, e
+ *    `turnos_extras` muda a ordem EXPANDIDA (de quem é a vez).
+ * Faltar qualquer um destes = a mudança não sincroniza até algo OUTRO disparar
+ * um sync (foi o bug: só peças+terreno estavam na assinatura).
  */
-export function assinaturaPecas(estado: EstadoBatalha): string {
-  return estado.combatentes
+export function assinaturaMapaSync(estado: EstadoBatalha): string {
+  const pecas = estado.combatentes
     .filter((c) => c.posicao)
     .map((c) => `${estado.ordem.indexOf(c.id)}@${c.posicao![0]},${c.posicao![1]}`)
     .sort()
     .join(";");
+  const anotacoes = estado.anotacoes
+    .map((a) => `${a.linha},${a.coluna}=${a.simbolo}`)
+    .sort()
+    .join(";");
+  const extras = estado.combatentes
+    .map((c) => `${c.id}:${c.turnos_extras}`)
+    .sort()
+    .join(",");
+  return `r${estado.rodada}t${estado.indice_turno}|O:${estado.ordem.join(",")}|X:${extras}|P:${pecas}|A:${anotacoes}`;
 }
